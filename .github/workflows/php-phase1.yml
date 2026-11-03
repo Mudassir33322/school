@@ -86,6 +86,7 @@ jobs:
           bash bin/phase6-fee-billing-http.sh
           bash bin/phase7-fee-refunds-http.sh
           bash bin/phase8-installments-http.sh
+          bash bin/release-security-regression.sh
 
       - name: Prepare clean PHP development source package
         if: success()
@@ -99,6 +100,6 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: campusos-php-installments-reconciliation-preview
+          name: campusos-php-release-candidate-security-audit
           path: phase1-package/
           retention-days: 14
