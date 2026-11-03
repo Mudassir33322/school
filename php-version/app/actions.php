@@ -117,7 +117,7 @@ function handle_action(): never {
    case 'admission_enroll':
     $app=positive_id('application_id');$admissionNo=required_text('admission_no',64);
     $studentPassword=(string)($_POST['student_password']??'');$guardianPassword=(string)($_POST['guardian_password']??'');
-    if(strlen($studentPassword)<12||strlen($guardianPassword)<12)throw new InvalidArgumentException('Both new passwords must contain at least 12 characters');
+    if(strlen($studentPassword)<12)throw new InvalidArgumentException('Student password must contain at least 12 characters');
     db()->beginTransaction();
     try{
       $application=one("SELECT * FROM admission_applications WHERE id=? AND school_id=? FOR UPDATE",[$app,$school]);
@@ -133,6 +133,7 @@ function handle_action(): never {
         if($parent['role']!=='parent'||(int)$parent['branch_id']!==$b)throw new InvalidArgumentException('Guardian account has an incompatible role or branch');
         $parentId=(int)$parent['id'];
       }else{
+        if(strlen($guardianPassword)<12)throw new InvalidArgumentException('New guardian password must contain at least 12 characters');
         run("INSERT INTO users(school_id,branch_id,role,full_name,email,password_hash) VALUES (?,?,'parent',?,?,?)",[$school,$b,$application['guardian_name'],$application['guardian_email'],password_hash($guardianPassword,PASSWORD_DEFAULT)]);
         $parentId=(int)db()->lastInsertId();
       }
