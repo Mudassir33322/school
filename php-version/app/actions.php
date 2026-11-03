@@ -203,7 +203,7 @@ function handle_action(): never {
     require_roles(['admin','principal','teacher']);
     $subm=assert_school_row('homework_submissions',positive_id('submission_id'),$school);
     $hw=assert_school_row('homework',(int)$subm['homework_id'],$school);
-    if(!is_teacher_assigned($u,(int)$hw['class_id'],(int)$hw['section_id'],(int)$hw['subject_id']))throw new InvalidArgumentException('Not assigned');
+    if(!is_teacher_assigned($u,(int)$hw['class_id'],(int)$hw['section_id'],(int)$hw['subject_id'])||($u['role']==='teacher' && (int)$hw['teacher_user_id']!==$actor))throw new InvalidArgumentException('You cannot grade another teacher\'s homework');
     $marks=money_input('marks');if($marks>(float)$hw['max_marks'])throw new InvalidArgumentException('Marks exceed maximum');
     run("UPDATE homework_submissions SET marks=?,feedback=?,graded_by=? WHERE id=? AND school_id=?",[$marks,trim((string)($_POST['feedback']??'')),$actor,$subm['id'],$school]);break;
    case 'exam':
@@ -230,12 +230,14 @@ function handle_action(): never {
     run("UPDATE exams SET published=1 WHERE id=? AND school_id=?",[$ex['id'],$school]);break;
    case 'fee_invoice':
     $student=positive_id('student_user_id');$p=verify_student($school,$student);
+    if(!allowed_branch($u,(int)$p['branch_id']))throw new InvalidArgumentException('Student belongs to another branch');
     $amount=money_input('amount');if($amount<=0)throw new InvalidArgumentException('Amount must exceed zero');
     run("INSERT INTO fee_invoices(school_id,branch_id,student_user_id,invoice_no,description,amount,due_date) VALUES (?,?,?,?,?,?,?)",
      [$school,$p['branch_id'],$student,required_text('invoice_no',64),required_text('description'),$amount,date_input('due_date')]);break;
    case 'fee_payment':
     require_roles(['admin','accountant']);
     $invoice=assert_school_row('fee_invoices',positive_id('invoice_id'),$school);
+    if(!allowed_branch($u,(int)$invoice['branch_id']))throw new InvalidArgumentException('Invoice belongs to another branch');
     $amount=money_input('amount');$mode=(string)($_POST['mode']??'cash');
     if(!in_array($mode,['cash','bank','cheque','online_manual'],true)||$amount<=0)throw new InvalidArgumentException('Invalid payment');
     db()->beginTransaction();
