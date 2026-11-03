@@ -265,17 +265,38 @@ function handle_action(): never {
      [$school,$section['branch_id'],$c,$s,$sub,required_text('title'),date_input('exam_date'),$max,$passing]);break;
    case 'exam_mark':
     require_roles(['admin','principal','teacher']);
-    $ex=assert_school_row('exams',positive_id('exam_id'),$school);
-    $student=positive_id('student_user_id');$p=verify_student($school,$student);
-    if((int)$p['section_id']!==(int)$ex['section_id'] || (int)$p['class_id']!==(int)$ex['class_id'])throw new InvalidArgumentException('Student not in exam section');
-    if(!is_teacher_assigned($u,(int)$ex['class_id'],(int)$ex['section_id'],(int)$ex['subject_id']))throw new InvalidArgumentException('Not assigned');
-    $marks=money_input('marks');if($marks>(float)$ex['max_marks'])throw new InvalidArgumentException('Marks exceed max');
-    run("INSERT INTO exam_results(school_id,exam_id,student_user_id,marks,recorded_by) VALUES (?,?,?,?,?) ON DUPLICATE KEY UPDATE marks=VALUES(marks),recorded_by=VALUES(recorded_by)",
-     [$school,$ex['id'],$student,$marks,$actor]);break;
+    $examId=positive_id('exam_id');$student=positive_id('student_user_id');
+    $marks=money_input('marks');
+    db()->beginTransaction();
+    try {
+     // Exam record lock serializes marking with publication.
+     $ex=one("SELECT * FROM exams WHERE id=? AND school_id=? FOR UPDATE",[$examId,$school]);
+     if(!$ex)throw new InvalidArgumentException('Exam not found');
+     if((int)$ex['published']===1)throw new InvalidArgumentException('Published results are locked. No marks can be changed.');
+     $p=verify_student($school,$student);
+     if((int)$p['section_id']!==(int)$ex['section_id'] || (int)$p['class_id']!==(int)$ex['class_id'])throw new InvalidArgumentException('Student not in exam section');
+     if(!is_teacher_assigned($u,(int)$ex['class_id'],(int)$ex['section_id'],(int)$ex['subject_id'])||!allowed_branch($u,(int)$ex['branch_id']))throw new InvalidArgumentException('Teacher is not assigned to this exam');
+     if($marks>(float)$ex['max_marks'])throw new InvalidArgumentException('Marks exceed maximum');
+     run("INSERT INTO exam_results(school_id,exam_id,student_user_id,marks,recorded_by) VALUES (?,?,?,?,?) ON DUPLICATE KEY UPDATE marks=VALUES(marks),recorded_by=VALUES(recorded_by)",
+      [$school,$ex['id'],$student,$marks,$actor]);
+     db()->commit();
+    }catch(Throwable $e){db()->rollBack();throw $e;}
+    break;
    case 'publish_exam':
     require_roles(['admin','principal']);
-    $ex=assert_school_row('exams',positive_id('exam_id'),$school);
-    run("UPDATE exams SET published=1 WHERE id=? AND school_id=?",[$ex['id'],$school]);break;
+    $examId=positive_id('exam_id');
+    db()->beginTransaction();
+    try {
+     $ex=one("SELECT * FROM exams WHERE id=? AND school_id=? FOR UPDATE",[$examId,$school]);
+     if(!$ex)throw new InvalidArgumentException('Exam not found');
+     if((int)$ex['published']===1)throw new InvalidArgumentException('Exam already published');
+     $enrolled=(int)(one("SELECT COUNT(*) n FROM student_profiles WHERE school_id=? AND branch_id=? AND section_id=? AND class_id=?",[$school,$ex['branch_id'],$ex['section_id'],$ex['class_id']])['n']??0);
+     $marked=(int)(one("SELECT COUNT(*) n FROM exam_results WHERE school_id=? AND exam_id=?",[$school,$examId])['n']??0);
+     if($enrolled===0||$enrolled!==$marked)throw new InvalidArgumentException("Cannot publish: $marked of $enrolled students marked");
+     run("UPDATE exams SET published=1 WHERE id=? AND school_id=? AND published=0",[$examId,$school]);
+     db()->commit();
+    }catch(Throwable $e){db()->rollBack();throw $e;}
+    break;
    case 'fee_invoice':
     $student=positive_id('student_user_id');$p=verify_student($school,$student);
     if(!allowed_branch($u,(int)$p['branch_id']))throw new InvalidArgumentException('Student belongs to another branch');
