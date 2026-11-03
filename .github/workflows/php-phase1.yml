@@ -1,4 +1,4 @@
-name: Core PHP Phase 1 Checks
+name: Core PHP Multi-Phase Regression Checks
 on:
   push:
     branches: [core-php-mysql-conversion]
@@ -80,8 +80,9 @@ jobs:
           test -s /tmp/campusos-login.html
           bash bin/smoke-http.sh
           bash bin/phase2-smoke-http.sh
+          bash bin/phase3-smoke-http.sh
 
-      - name: Prepare clean Phase 1 source package
+      - name: Prepare clean PHP development source package
         if: success()
         working-directory: .
         run: |
@@ -89,10 +90,10 @@ jobs:
           git archive --format=tar HEAD:php-version | tar -xf - -C phase1-package
           test -f phase1-package/public/index.php
           test ! -f phase1-package/config.php
-      - name: Upload Phase 1 preview ZIP
+      - name: Upload multi-phase development preview ZIP
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: campusos-php-phase1-preview
+          name: campusos-php-phase3-development-preview
           path: phase1-package/
           retention-days: 14
