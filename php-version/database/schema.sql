@@ -81,6 +81,33 @@ CREATE TABLE IF NOT EXISTS student_profiles (
  FOREIGN KEY(user_id) REFERENCES users(id), FOREIGN KEY(parent_user_id) REFERENCES users(id),
  FOREIGN KEY(class_id) REFERENCES classes(id), FOREIGN KEY(section_id) REFERENCES sections(id)
 ) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS student_movements (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+ school_id BIGINT UNSIGNED NOT NULL,
+ student_user_id BIGINT UNSIGNED NOT NULL,
+ from_branch_id BIGINT UNSIGNED NOT NULL,
+ to_branch_id BIGINT UNSIGNED NOT NULL,
+ from_class_id BIGINT UNSIGNED NOT NULL,
+ to_class_id BIGINT UNSIGNED NOT NULL,
+ from_section_id BIGINT UNSIGNED NOT NULL,
+ to_section_id BIGINT UNSIGNED NOT NULL,
+ academic_session_id BIGINT UNSIGNED NOT NULL,
+ movement_type ENUM('promotion','section_change','transfer') NOT NULL,
+ reason VARCHAR(255) NOT NULL,
+ performed_by BIGINT UNSIGNED NOT NULL,
+ created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ INDEX idx_student_history (school_id,student_user_id,created_at),
+ FOREIGN KEY (school_id) REFERENCES schools(id) ON DELETE CASCADE,
+ FOREIGN KEY (student_user_id) REFERENCES users(id),
+ FOREIGN KEY (from_branch_id) REFERENCES branches(id),
+ FOREIGN KEY (to_branch_id) REFERENCES branches(id),
+ FOREIGN KEY (from_class_id) REFERENCES classes(id),
+ FOREIGN KEY (to_class_id) REFERENCES classes(id),
+ FOREIGN KEY (from_section_id) REFERENCES sections(id),
+ FOREIGN KEY (to_section_id) REFERENCES sections(id),
+ FOREIGN KEY (academic_session_id) REFERENCES school_sessions(id),
+ FOREIGN KEY (performed_by) REFERENCES users(id)
+) ENGINE=InnoDB;
 CREATE TABLE IF NOT EXISTS admission_applications (
  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
  school_id BIGINT UNSIGNED NOT NULL,
@@ -241,6 +268,28 @@ CREATE TABLE IF NOT EXISTS library_books (
  author VARCHAR(190) DEFAULT NULL, isbn VARCHAR(40) DEFAULT NULL,
  copies INT UNSIGNED NOT NULL DEFAULT 1, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
  FOREIGN KEY(school_id) REFERENCES schools(id) ON DELETE CASCADE, FOREIGN KEY(branch_id) REFERENCES branches(id)
+) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS library_loans (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+ school_id BIGINT UNSIGNED NOT NULL,
+ branch_id BIGINT UNSIGNED NOT NULL,
+ book_id BIGINT UNSIGNED NOT NULL,
+ borrower_user_id BIGINT UNSIGNED NOT NULL,
+ issue_date DATE NOT NULL,
+ due_date DATE NOT NULL,
+ returned_at DATETIME DEFAULT NULL,
+ issued_by BIGINT UNSIGNED NOT NULL,
+ returned_by BIGINT UNSIGNED DEFAULT NULL,
+ created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ INDEX idx_loan_book (school_id,book_id,returned_at),
+ INDEX idx_loan_borrower (school_id,borrower_user_id,returned_at),
+ FOREIGN KEY (school_id) REFERENCES schools(id) ON DELETE CASCADE,
+ FOREIGN KEY (branch_id) REFERENCES branches(id),
+ FOREIGN KEY (book_id) REFERENCES library_books(id),
+ FOREIGN KEY (borrower_user_id) REFERENCES users(id),
+ FOREIGN KEY (issued_by) REFERENCES users(id),
+ FOREIGN KEY (returned_by) REFERENCES users(id),
+ CONSTRAINT chk_library_loan_dates CHECK (due_date >= issue_date)
 ) ENGINE=InnoDB;
 CREATE TABLE IF NOT EXISTS transport_routes (
  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, school_id BIGINT UNSIGNED NOT NULL,
