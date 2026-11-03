@@ -90,9 +90,9 @@ function handle_action(): never {
    run("UPDATE schools SET status=? WHERE id=?",[$status,$school]);audit(null,null,'status','school',$school);flash('School status updated.');redirect('company');
   }
   $u=require_school();$school=(int)$u['school_id'];$actor=(int)$u['id'];$branch=(int)($u['branch_id']??0);
-  if(in_array($action,['admission_apply','admission_review','admission_enroll','student_move','library_loan','library_return','branch','academic_session','session_activate','class','section','subject','person','student_enrollment','allocation','timetable','notice','library_book','transport_route','inventory_item','certificate','fee_invoice','fee_adjustment','payroll'],true)){
+  if(in_array($action,['admission_apply','admission_review','admission_enroll','student_move','library_loan','library_return','transport_assign','transport_release','inventory_move','branch','academic_session','session_activate','class','section','subject','person','student_enrollment','allocation','timetable','notice','library_book','transport_route','inventory_item','certificate','fee_invoice','fee_adjustment','payroll'],true)){
    require_roles(['admin','principal','accountant']);
-   $academic=['admission_apply','admission_review','admission_enroll','student_move','library_loan','library_return','branch','academic_session','class','section','subject','person','student_enrollment','allocation','timetable','notice','library_book','transport_route','inventory_item','certificate'];
+   $academic=['admission_apply','admission_review','admission_enroll','student_move','library_loan','library_return','transport_assign','transport_release','inventory_move','branch','academic_session','class','section','subject','person','student_enrollment','allocation','timetable','notice','library_book','transport_route','inventory_item','certificate'];
    if(in_array($action,$academic,true)&&$u['role']==='accountant')throw new InvalidArgumentException('Accountant access restricted');
    $finance=['fee_invoice','fee_adjustment','payroll'];
    if(in_array($action,$finance,true)&&!in_array($u['role'],['admin','accountant'],true))throw new InvalidArgumentException('Finance access restricted');
@@ -221,6 +221,8 @@ function handle_action(): never {
      if($type==='section_change' && ($toClass!==$fromClass || $toBranch!==$fromBranch))throw new InvalidArgumentException('Section change must stay in the same class and campus');
      if($type==='transfer' && $toBranch===$fromBranch)throw new InvalidArgumentException('Transfer must target a different campus');
      if($toBranch!==$fromBranch){
+      $activeTransport=(int)(one("SELECT COUNT(*) n FROM transport_assignments WHERE school_id=? AND student_user_id=? AND released_at IS NULL",[$school,$student])['n']??0);
+      if($activeTransport>0)throw new InvalidArgumentException('Release active transport assignment before transferring campus');
       $activeLoans=(int)(one("SELECT COUNT(*) n FROM library_loans WHERE school_id=? AND borrower_user_id=? AND returned_at IS NULL",[$school,$student])['n']??0);
       if($activeLoans>0)throw new InvalidArgumentException('Return active library loans before transferring campus');
      }
@@ -424,12 +426,78 @@ function handle_action(): never {
       [$school,$b,required_text('title'),trim((string)($_POST['author']??'')),trim((string)($_POST['isbn']??'')),positive_id('copies')]);break;
    case 'transport_route':
     $b=positive_id('branch_id');assert_branch($b,$school);
-    run("INSERT INTO transport_routes(school_id,branch_id,name,vehicle,driver_name,monthly_fee) VALUES (?,?,?,?,?,?)",
-      [$school,$b,required_text('name'),trim((string)($_POST['vehicle']??'')),trim((string)($_POST['driver_name']??'')),money_input('monthly_fee')]);break;
+    if(!allowed_branch($u,$b))throw new InvalidArgumentException('Cannot manage another campus');
+    $seats=positive_id('seat_capacity');
+    if($seats>120)throw new InvalidArgumentException('Maximum capacity is 120 seats');
+    run("INSERT INTO transport_routes(school_id,branch_id,name,vehicle,driver_name,monthly_fee,seat_capacity) VALUES (?,?,?,?,?,?,?)",
+      [$school,$b,required_text('name'),trim((string)($_POST['vehicle']??'')),trim((string)($_POST['driver_name']??'')),money_input('monthly_fee'),$seats]);break;
+   case 'transport_assign':
+    $routeId=positive_id('route_id');$studentId=positive_id('student_user_id');
+    db()->beginTransaction();
+    try{
+     $route=one("SELECT * FROM transport_routes WHERE id=? AND school_id=? FOR UPDATE",[$routeId,$school]);
+     if(!$route||!allowed_branch($u,(int)$route['branch_id']))throw new InvalidArgumentException('Route not available to this campus');
+     $studentProfile=verify_student($school,$studentId);
+     if((int)$studentProfile['branch_id']!==(int)$route['branch_id'])throw new InvalidArgumentException('Student and route campuses must match');
+     $existing=one("SELECT id FROM transport_assignments WHERE school_id=? AND student_user_id=? AND released_at IS NULL",[$school,$studentId]);
+     if($existing)throw new InvalidArgumentException('Student already has an active transport route');
+     $occupied=(int)(one("SELECT COUNT(*) n FROM transport_assignments WHERE school_id=? AND route_id=? AND released_at IS NULL",[$school,$routeId])['n']??0);
+     if($occupied >= (int)$route['seat_capacity'])throw new InvalidArgumentException('No free seats on this route');
+     run("INSERT INTO transport_assignments(school_id,branch_id,route_id,student_user_id,assigned_on,assigned_by) VALUES (?,?,?,?,CURDATE(),?)",
+      [$school,$route['branch_id'],$routeId,$studentId,$actor]);
+     db()->commit();
+    }catch(Throwable $e){db()->rollBack();throw $e;}
+    break;
+   case 'transport_release':
+    $assignmentId=positive_id('assignment_id');
+    db()->beginTransaction();
+    try{
+     $assignment=one("SELECT * FROM transport_assignments WHERE id=? AND school_id=? FOR UPDATE",[$assignmentId,$school]);
+     if(!$assignment||!allowed_branch($u,(int)$assignment['branch_id']))throw new InvalidArgumentException('Assignment not accessible');
+     if($assignment['released_at']!==null)throw new InvalidArgumentException('Assignment already released');
+     run("UPDATE transport_assignments SET released_at=NOW(),released_by=? WHERE id=? AND school_id=? AND released_at IS NULL",[$actor,$assignmentId,$school]);
+     db()->commit();
+    }catch(Throwable $e){db()->rollBack();throw $e;}
+    break;
    case 'inventory_item':
     $b=positive_id('branch_id');assert_branch($b,$school);
-    run("INSERT INTO inventory_items(school_id,branch_id,name,sku,quantity) VALUES (?,?,?,?,?)",
-      [$school,$b,required_text('name'),trim((string)($_POST['sku']??'')),(int)($_POST['quantity']??0)]);break;
+    if(!allowed_branch($u,$b))throw new InvalidArgumentException('Cannot manage inventory in another campus');
+    $raw=(string)($_POST['quantity']??'0');
+    if(!ctype_digit($raw)||(int)$raw>1000000)throw new InvalidArgumentException('Initial stock must be 0 to 1,000,000');
+    $initial=(int)$raw;
+    db()->beginTransaction();
+    try {
+     run("INSERT INTO inventory_items(school_id,branch_id,name,sku,quantity) VALUES (?,?,?,?,?)",
+      [$school,$b,required_text('name'),trim((string)($_POST['sku']??'')),$initial]);
+     $itemId=(int)db()->lastInsertId();
+     if($initial>0){
+      run("INSERT INTO inventory_movements(school_id,branch_id,item_id,movement_type,quantity,balance_before,balance_after,reason,performed_by) VALUES (?,?,?,'opening',?,0,?,'Initial stock',?)",
+       [$school,$b,$itemId,$initial,$initial,$actor]);
+     }
+     db()->commit();
+    }catch(Throwable $e){db()->rollBack();throw $e;}
+    break;
+   case 'inventory_move':
+    $itemId=positive_id('item_id');
+    $kind=(string)($_POST['movement_type']??'');
+    if(!in_array($kind,['receipt','issue'],true))throw new InvalidArgumentException('Invalid stock movement type');
+    $qty=positive_id('quantity');
+    if($qty>1000000)throw new InvalidArgumentException('Movement quantity is too large');
+    $reason=required_text('reason',255);
+    db()->beginTransaction();
+    try{
+     $item=one("SELECT * FROM inventory_items WHERE id=? AND school_id=? FOR UPDATE",[$itemId,$school]);
+     if(!$item||!allowed_branch($u,(int)$item['branch_id']))throw new InvalidArgumentException('Inventory item not available to this campus');
+     $before=(int)$item['quantity'];
+     $after=$kind==='receipt'?$before+$qty:$before-$qty;
+     if($after<0)throw new InvalidArgumentException('Cannot issue more items than current stock');
+     if($after>100000000)throw new InvalidArgumentException('Stock balance exceeds limit');
+     run("UPDATE inventory_items SET quantity=? WHERE id=? AND school_id=?",[$after,$itemId,$school]);
+     run("INSERT INTO inventory_movements(school_id,branch_id,item_id,movement_type,quantity,balance_before,balance_after,reason,performed_by) VALUES (?,?,?,?,?,?,?,?,?)",
+      [$school,$item['branch_id'],$itemId,$kind,$qty,$before,$after,$reason,$actor]);
+     db()->commit();
+    }catch(Throwable $e){db()->rollBack();throw $e;}
+    break;
    case 'payroll':
     $employee=positive_id('employee_user_id');$person=school_user($employee,$school);
     if(!in_array($person['role'],['teacher','staff','principal','accountant'],true))throw new InvalidArgumentException('Not an employee');
