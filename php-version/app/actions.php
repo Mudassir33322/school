@@ -90,11 +90,11 @@ function handle_action(): never {
    run("UPDATE schools SET status=? WHERE id=?",[$status,$school]);audit(null,null,'status','school',$school);flash('School status updated.');redirect('company');
   }
   $u=require_school();$school=(int)$u['school_id'];$actor=(int)$u['id'];$branch=(int)($u['branch_id']??0);
-  if(in_array($action,['admission_apply','admission_review','admission_enroll','student_move','library_loan','library_return','transport_assign','transport_release','inventory_move','branch','academic_session','session_activate','class','section','subject','person','student_enrollment','allocation','timetable','notice','library_book','transport_route','inventory_item','certificate','fee_invoice','fee_adjustment','payroll','payroll_approve','payroll_pay'],true)){
+  if(in_array($action,['admission_apply','admission_review','admission_enroll','student_move','library_loan','library_return','transport_assign','transport_release','inventory_move','branch','academic_session','session_activate','class','section','subject','person','student_enrollment','allocation','timetable','notice','library_book','transport_route','inventory_item','certificate','fee_plan_save','fee_month_generate','fee_invoice','fee_adjustment','payroll','payroll_approve','payroll_pay'],true)){
    require_roles(['admin','principal','accountant']);
    $academic=['admission_apply','admission_review','admission_enroll','student_move','library_loan','library_return','transport_assign','transport_release','inventory_move','branch','academic_session','class','section','subject','person','student_enrollment','allocation','timetable','notice','library_book','transport_route','inventory_item','certificate'];
    if(in_array($action,$academic,true)&&$u['role']==='accountant')throw new InvalidArgumentException('Accountant access restricted');
-   $finance=['fee_invoice','fee_adjustment','payroll','payroll_pay'];
+   $finance=['fee_plan_save','fee_month_generate','fee_invoice','fee_adjustment','payroll','payroll_pay'];
    if(in_array($action,$finance,true))require_roles(['admin','accountant']);
   }
   switch($action){
@@ -375,6 +375,62 @@ function handle_action(): never {
      db()->commit();
     }catch(Throwable $e){db()->rollBack();throw $e;}
     break;
+   case 'fee_plan_save':
+    require_roles(['admin']);
+    $b=positive_id('branch_id');$c=positive_id('class_id');
+    assert_branch($b,$school);ownership('classes',$c,$school);
+    $monthly=money_input('monthly_tuition');
+    if($monthly>100000000)throw new InvalidArgumentException('Tuition amount exceeds allowed limit');
+    run("INSERT INTO fee_plans(school_id,branch_id,class_id,monthly_tuition,created_by) VALUES (?,?,?,?,?) ON DUPLICATE KEY UPDATE monthly_tuition=VALUES(monthly_tuition)",
+      [$school,$b,$c,$monthly,$actor]);
+    break;
+   case 'fee_month_generate':
+    require_roles(['admin','accountant']);
+    $b=positive_id('branch_id');$c=positive_id('class_id');
+    assert_branch($b,$school);ownership('classes',$c,$school);
+    if($u['role']==='accountant' && (int)$u['branch_id']!==$b)throw new InvalidArgumentException('Accountant cannot generate invoices for another campus');
+    $month=required_text('billing_month',7);
+    if(!preg_match('/^20[0-9]{2}-(0[1-9]|1[0-2])$/',$month))throw new InvalidArgumentException('Select a valid billing month');
+    $firstDay=$month.'-01';
+    $lastDay=(new DateTimeImmutable($firstDay))->format('Y-m-t');
+    $dueDate=date_input('due_date');
+    if($dueDate<$firstDay)throw new InvalidArgumentException('Due date must not precede billing month');
+    $generatedCount=0;$skippedNoCharge=0;
+    db()->beginTransaction();
+    try {
+     // Serializes identical class/month batches, including simultaneous requests.
+     $plan=one("SELECT * FROM fee_plans WHERE school_id=? AND branch_id=? AND class_id=? FOR UPDATE",[$school,$b,$c]);
+     if(!$plan)throw new InvalidArgumentException('Create a class fee plan before generating bills');
+     $pupils=many("SELECT sp.user_id,u.full_name FROM student_profiles sp JOIN users u ON u.id=sp.user_id AND u.school_id=sp.school_id AND u.status='active' LEFT JOIN fee_invoices fi ON fi.school_id=sp.school_id AND fi.student_user_id=sp.user_id AND fi.billing_month=? WHERE sp.school_id=? AND sp.branch_id=? AND sp.class_id=? AND fi.id IS NULL ORDER BY sp.user_id LIMIT 200",
+      [$month,$school,$b,$c]);
+     foreach($pupils as $pupil){
+      $studentId=(int)$pupil['user_id'];
+      // Exactly one transport charge per student/month, based on the most recently assigned
+      // route overlapping this month; no prorating in this first billing implementation.
+      $route=one("SELECT tr.id,tr.name,tr.monthly_fee FROM transport_assignments ta JOIN transport_routes tr ON tr.id=ta.route_id AND tr.school_id=ta.school_id WHERE ta.school_id=? AND ta.branch_id=? AND ta.student_user_id=? AND ta.assigned_on<=? AND (ta.released_at IS NULL OR DATE(ta.released_at)>=?) ORDER BY ta.assigned_on DESC,ta.id DESC LIMIT 1",
+       [$school,$b,$studentId,$lastDay,$firstDay]);
+      $tuition=round((float)$plan['monthly_tuition'],2);
+      $transport=$route?round((float)$route['monthly_fee'],2):0.0;
+      $total=round($tuition+$transport,2);
+      if($total<=0){$skippedNoCharge++;continue;}
+      if($total>100000000)throw new InvalidArgumentException('Monthly invoice amount exceeds allowed limit');
+      $invoiceNo='M'.str_replace('-','',$month).'-S'.$studentId;
+      run("INSERT INTO fee_invoices(school_id,branch_id,student_user_id,invoice_no,description,amount,due_date,billing_month,source,fee_plan_id) VALUES (?,?,?,?,?,?,?,?,'monthly',?)",
+       [$school,$b,$studentId,$invoiceNo,'Monthly fees '.$month,$total,$dueDate,$month,$plan['id']]);
+      $invoiceId=(int)db()->lastInsertId();
+      if($tuition>0){
+       run("INSERT INTO fee_invoice_items(school_id,invoice_id,item_type,description,amount) VALUES (?,?,'tuition',?,?)",
+        [$school,$invoiceId,'Class tuition '.$month,$tuition]);
+      }
+      if($transport>0){
+       run("INSERT INTO fee_invoice_items(school_id,invoice_id,item_type,description,amount,route_id) VALUES (?,?,'transport',?,?,?)",
+        [$school,$invoiceId,'Transport: '.$route['name'],$transport,(int)$route['id']]);
+      }
+      $generatedCount++;
+     }
+     db()->commit();
+    }catch(Throwable $e){db()->rollBack();throw $e;}
+    break;
    case 'fee_invoice':
     $student=positive_id('student_user_id');$p=verify_student($school,$student);
     if(!allowed_branch($u,(int)$p['branch_id']))throw new InvalidArgumentException('Student belongs to another branch');
@@ -575,7 +631,8 @@ function handle_action(): never {
    default:throw new InvalidArgumentException('Unknown action');
   }
   audit($school,$actor,'create_or_update',$action,null);
-  flash('Saved successfully.');$back=(string)($_POST['_back']??'dashboard');
+  if($action==='fee_month_generate')flash('Generated '.$generatedCount.' monthly invoice(s); skipped '.$skippedNoCharge.' zero-charge student(s). Repeat to process additional unbilled students.');
+  else flash('Saved successfully.');$back=(string)($_POST['_back']??'dashboard');
   $approved=['dashboard','admissions','setup','people','academics','attendance','homework','exams','finance','payroll','notices','resources','reports','documents','leave','timetable'];
   redirect(in_array($back,$approved,true)?$back:'dashboard');
  }catch(PDOException $e) {
