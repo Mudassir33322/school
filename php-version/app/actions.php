@@ -710,6 +710,7 @@ function handle_action(): never {
       [$school,$actor,$start,$end,required_text('reason',5000)]);break;
    case 'leave_decide':
     require_roles(['admin','principal']);$req=assert_school_row('leave_requests',positive_id('request_id'),$school);
+    if($u['role']==='principal'){$requestOwner=school_user((int)$req['user_id'],$school);if((int)$requestOwner['branch_id']!==(int)$u['branch_id'])throw new InvalidArgumentException('Leave applicant belongs to another campus');}
     $st=(string)($_POST['status']??'');if(!in_array($st,['approved','rejected'],true))throw new InvalidArgumentException('Invalid status');
     run("UPDATE leave_requests SET status=? WHERE id=? AND school_id=?",[$st,$req['id'],$school]);break;
    default:throw new InvalidArgumentException('Unknown action');
