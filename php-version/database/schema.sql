@@ -347,13 +347,47 @@ CREATE TABLE IF NOT EXISTS inventory_movements (
  CONSTRAINT chk_inventory_balance CHECK (balance_after >= 0)
 ) ENGINE=InnoDB;
 CREATE TABLE IF NOT EXISTS payroll_entries (
- id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, school_id BIGINT UNSIGNED NOT NULL,
- employee_user_id BIGINT UNSIGNED NOT NULL, month_key CHAR(7) NOT NULL,
- basic DECIMAL(12,2) NOT NULL DEFAULT 0, allowance DECIMAL(12,2) NOT NULL DEFAULT 0,
- deduction DECIMAL(12,2) NOT NULL DEFAULT 0, status ENUM('unpaid','paid') NOT NULL DEFAULT 'unpaid',
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+ school_id BIGINT UNSIGNED NOT NULL,
+ branch_id BIGINT UNSIGNED DEFAULT NULL,
+ employee_user_id BIGINT UNSIGNED NOT NULL,
+ month_key CHAR(7) NOT NULL,
+ basic DECIMAL(12,2) NOT NULL DEFAULT 0,
+ allowance DECIMAL(12,2) NOT NULL DEFAULT 0,
+ deduction DECIMAL(12,2) NOT NULL DEFAULT 0,
+ status ENUM('draft','approved','paid') NOT NULL DEFAULT 'draft',
+ notes VARCHAR(255) NOT NULL DEFAULT '',
+ created_by BIGINT UNSIGNED DEFAULT NULL,
+ approved_by BIGINT UNSIGNED DEFAULT NULL,
+ approved_at DATETIME DEFAULT NULL,
+ paid_by BIGINT UNSIGNED DEFAULT NULL,
+ paid_at DATETIME DEFAULT NULL,
+ payment_mode ENUM('cash','bank','cheque','manual_transfer') DEFAULT NULL,
+ payment_reference VARCHAR(100) DEFAULT NULL,
+ created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
  UNIQUE KEY unique_payroll (school_id,employee_user_id,month_key),
+ INDEX idx_payroll_school_branch_status (school_id,branch_id,status),
  FOREIGN KEY(school_id) REFERENCES schools(id) ON DELETE CASCADE,
- FOREIGN KEY(employee_user_id) REFERENCES users(id)
+ FOREIGN KEY(branch_id) REFERENCES branches(id),
+ FOREIGN KEY(employee_user_id) REFERENCES users(id),
+ FOREIGN KEY(created_by) REFERENCES users(id),
+ FOREIGN KEY(approved_by) REFERENCES users(id),
+ FOREIGN KEY(paid_by) REFERENCES users(id),
+ CONSTRAINT chk_payroll_nonnegative CHECK (basic >= 0 AND allowance >= 0 AND deduction >= 0),
+ CONSTRAINT chk_payroll_net CHECK (basic + allowance - deduction > 0)
+) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS payroll_events (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+ school_id BIGINT UNSIGNED NOT NULL,
+ payroll_id BIGINT UNSIGNED NOT NULL,
+ event_type ENUM('created','approved','paid') NOT NULL,
+ actor_user_id BIGINT UNSIGNED NOT NULL,
+ note VARCHAR(255) NOT NULL DEFAULT '',
+ created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ INDEX idx_payroll_events (school_id,payroll_id,created_at),
+ FOREIGN KEY(school_id) REFERENCES schools(id) ON DELETE CASCADE,
+ FOREIGN KEY(payroll_id) REFERENCES payroll_entries(id),
+ FOREIGN KEY(actor_user_id) REFERENCES users(id)
 ) ENGINE=InnoDB;
 CREATE TABLE IF NOT EXISTS certificates (
  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, school_id BIGINT UNSIGNED NOT NULL,
