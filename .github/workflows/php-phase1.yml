@@ -79,6 +79,7 @@ jobs:
           curl -fsS 'http://127.0.0.1:8080/assets/style.css' -o /dev/null
           test -s /tmp/campusos-login.html
           bash bin/smoke-http.sh
+          bash bin/phase2-smoke-http.sh
 
       - name: Prepare clean Phase 1 source package
         if: success()
