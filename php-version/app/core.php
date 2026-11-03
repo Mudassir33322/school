@@ -6,7 +6,21 @@ if (!is_file(dirname(__DIR__) . '/config.php')) {
 }
 define('APP_CONFIG', require dirname(__DIR__) . '/config.php');
 date_default_timezone_set((string)(APP_CONFIG['timezone'] ?? 'Asia/Karachi'));
+if (PHP_SAPI !== 'cli') {
+    // This app contains personal/financial information; never store private pages in shared caches.
+    header('X-Content-Type-Options: nosniff');
+    header('X-Frame-Options: DENY');
+    header('Referrer-Policy: strict-origin-when-cross-origin');
+    header('Cache-Control: no-store, private');
+    header('Permissions-Policy: geolocation=(), camera=(), microphone=()');
+    if ((APP_CONFIG['app_env'] ?? 'development') === 'production') {
+        ini_set('display_errors', '0');
+        ini_set('log_errors', '1');
+    }
+}
 if (session_status() !== PHP_SESSION_ACTIVE) {
+    ini_set('session.use_strict_mode','1');
+    ini_set('session.use_only_cookies','1');
     session_name('campusos_sid');
     session_set_cookie_params(['httponly'=>true, 'secure'=>(!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off'), 'samesite'=>'Lax', 'path'=>'/']);
     session_start();
