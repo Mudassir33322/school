@@ -78,3 +78,4 @@ jobs:
           grep -q 'school_code' /tmp/campusos-login.html
           curl -fsS 'http://127.0.0.1:8080/assets/style.css' -o /dev/null
           test -s /tmp/campusos-login.html
+          bash bin/smoke-http.sh
