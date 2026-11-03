@@ -90,11 +90,11 @@ function handle_action(): never {
    run("UPDATE schools SET status=? WHERE id=?",[$status,$school]);audit(null,null,'status','school',$school);flash('School status updated.');redirect('company');
   }
   $u=require_school();$school=(int)$u['school_id'];$actor=(int)$u['id'];$branch=(int)($u['branch_id']??0);
-  if(in_array($action,['admission_apply','admission_review','admission_enroll','student_move','library_loan','library_return','transport_assign','transport_release','inventory_move','branch','academic_session','session_activate','class','section','subject','person','student_enrollment','allocation','timetable','notice','library_book','transport_route','inventory_item','certificate','fee_invoice','fee_adjustment','payroll'],true)){
+  if(in_array($action,['admission_apply','admission_review','admission_enroll','student_move','library_loan','library_return','transport_assign','transport_release','inventory_move','branch','academic_session','session_activate','class','section','subject','person','student_enrollment','allocation','timetable','notice','library_book','transport_route','inventory_item','certificate','fee_invoice','fee_adjustment','payroll','payroll_approve','payroll_pay'],true)){
    require_roles(['admin','principal','accountant']);
    $academic=['admission_apply','admission_review','admission_enroll','student_move','library_loan','library_return','transport_assign','transport_release','inventory_move','branch','academic_session','class','section','subject','person','student_enrollment','allocation','timetable','notice','library_book','transport_route','inventory_item','certificate'];
    if(in_array($action,$academic,true)&&$u['role']==='accountant')throw new InvalidArgumentException('Accountant access restricted');
-   $finance=['fee_invoice','fee_adjustment','payroll'];
+   $finance=['fee_invoice','fee_adjustment','payroll','payroll_pay'];
    if(in_array($action,$finance,true)&&!in_array($u['role'],['admin','accountant'],true))throw new InvalidArgumentException('Finance access restricted');
   }
   switch($action){
@@ -499,11 +499,66 @@ function handle_action(): never {
     }catch(Throwable $e){db()->rollBack();throw $e;}
     break;
    case 'payroll':
+    require_roles(['admin','accountant']);
     $employee=positive_id('employee_user_id');$person=school_user($employee,$school);
-    if(!in_array($person['role'],['teacher','staff','principal','accountant'],true))throw new InvalidArgumentException('Not an employee');
-    $month=required_text('month_key',7);if(!preg_match('/^\d{4}-(0[1-9]|1[0-2])$/',$month))throw new InvalidArgumentException('Invalid month');
-    run("INSERT INTO payroll_entries(school_id,employee_user_id,month_key,basic,allowance,deduction) VALUES (?,?,?,?,?,?)",
-     [$school,$employee,$month,money_input('basic'),money_input('allowance'),money_input('deduction')]);break;
+    if(!in_array($person['role'],['admin','principal','accountant','teacher','staff'],true))throw new InvalidArgumentException('Account is not an employee');
+    if($employee===$actor)throw new InvalidArgumentException('Cannot create your own payroll');
+    $employeeBranch=(int)($person['branch_id']??0);
+    if(!$employeeBranch||($u['role']==='accountant' && (int)$u['branch_id']!==$employeeBranch))throw new InvalidArgumentException('Employee is not assigned to your campus');
+    $month=required_text('month_key',7);
+    if(!preg_match('/^\d{4}-(0[1-9]|1[0-2])$/',$month))throw new InvalidArgumentException('Invalid payroll month');
+    $basic=money_input('basic');$allowance=money_input('allowance');$deduction=money_input('deduction');
+    if($basic+$allowance-$deduction<=0)throw new InvalidArgumentException('Salary net amount must be positive');
+    if($basic>100000000||$allowance>100000000||$deduction>100000000)throw new InvalidArgumentException('Salary component exceeds allowed amount');
+    $note=trim((string)($_POST['notes']??''));
+    if(mb_strlen($note)>255)throw new InvalidArgumentException('Payroll notes too long');
+    db()->beginTransaction();
+    try{
+     run("INSERT INTO payroll_entries(school_id,branch_id,employee_user_id,month_key,basic,allowance,deduction,status,notes,created_by) VALUES (?,?,?,?,?,?,?,'draft',?,?)",
+       [$school,$employeeBranch,$employee,$month,$basic,$allowance,$deduction,$note,$actor]);
+     $newPayroll=(int)db()->lastInsertId();
+     run("INSERT INTO payroll_events(school_id,payroll_id,event_type,actor_user_id,note) VALUES (?,?,'created',?,?)",
+       [$school,$newPayroll,$actor,$note]);
+     db()->commit();
+    }catch(Throwable $e){db()->rollBack();throw $e;}
+    break;
+   case 'payroll_approve':
+    require_roles(['admin','principal']);
+    $payrollId=positive_id('payroll_id');
+    db()->beginTransaction();
+    try{
+     $payroll=one("SELECT * FROM payroll_entries WHERE id=? AND school_id=? FOR UPDATE",[$payrollId,$school]);
+     if(!$payroll)throw new InvalidArgumentException('Payroll not found');
+     if($payroll['status']!=='draft')throw new InvalidArgumentException('Only draft payroll can be approved');
+     if($u['role']==='principal' && (int)$u['branch_id']!==(int)$payroll['branch_id'])throw new InvalidArgumentException('Payroll belongs to another campus');
+     if((int)$payroll['employee_user_id']===$actor)throw new InvalidArgumentException('Self-approval is not permitted');
+     if((float)$payroll['basic']+(float)$payroll['allowance']-(float)$payroll['deduction']<=0)throw new InvalidArgumentException('Invalid net salary');
+     run("UPDATE payroll_entries SET status='approved',approved_by=?,approved_at=NOW() WHERE id=? AND school_id=? AND status='draft'",[$actor,$payrollId,$school]);
+     run("INSERT INTO payroll_events(school_id,payroll_id,event_type,actor_user_id,note) VALUES (?,?,'approved',?,'Salary verified and approved')",[$school,$payrollId,$actor]);
+     db()->commit();
+    }catch(Throwable $e){db()->rollBack();throw $e;}
+    break;
+   case 'payroll_pay':
+    require_roles(['admin','accountant']);
+    $payrollId=positive_id('payroll_id');
+    $mode=(string)($_POST['payment_mode']??'');
+    if(!in_array($mode,['cash','bank','cheque','manual_transfer'],true))throw new InvalidArgumentException('Choose a valid manual payment mode');
+    $reference=trim((string)($_POST['payment_reference']??''));
+    if(mb_strlen($reference)>100||($mode!=='cash' && $reference===''))throw new InvalidArgumentException('Non-cash salary payment requires a reference');
+    db()->beginTransaction();
+    try{
+     $payroll=one("SELECT * FROM payroll_entries WHERE id=? AND school_id=? FOR UPDATE",[$payrollId,$school]);
+     if(!$payroll)throw new InvalidArgumentException('Payroll not found');
+     if($payroll['status']!=='approved'||$payroll['approved_by']===null)throw new InvalidArgumentException('Payroll must be approved before payment');
+     if($u['role']==='accountant' && (int)$u['branch_id']!==(int)$payroll['branch_id'])throw new InvalidArgumentException('Payroll belongs to another campus');
+     if((int)$payroll['employee_user_id']===$actor)throw new InvalidArgumentException('Self-payment recording is not permitted');
+     run("UPDATE payroll_entries SET status='paid',paid_by=?,paid_at=NOW(),payment_mode=?,payment_reference=? WHERE id=? AND school_id=? AND status='approved'",
+       [$actor,$mode,$reference,$payrollId,$school]);
+     run("INSERT INTO payroll_events(school_id,payroll_id,event_type,actor_user_id,note) VALUES (?,?,'paid',?,?)",
+       [$school,$payrollId,$actor,substr('Manual '.$mode.' payment recorded: '.$reference,0,255)]);
+     db()->commit();
+    }catch(Throwable $e){db()->rollBack();throw $e;}
+    break;
    case 'certificate':
     $student=positive_id('student_user_id');verify_student($school,$student);
     run("INSERT INTO certificates(school_id,student_user_id,title,body,issued_on) VALUES (?,?,?,?,?)",
@@ -521,12 +576,12 @@ function handle_action(): never {
   }
   audit($school,$actor,'create_or_update',$action,null);
   flash('Saved successfully.');$back=(string)($_POST['_back']??'dashboard');
-  $approved=['dashboard','admissions','setup','people','academics','attendance','homework','exams','finance','notices','resources','reports','documents','leave','timetable'];
+  $approved=['dashboard','admissions','setup','people','academics','attendance','homework','exams','finance','payroll','notices','resources','reports','documents','leave','timetable'];
   redirect(in_array($back,$approved,true)?$back:'dashboard');
  }catch(PDOException $e) {
     error_log($e->getMessage());
     flash('Database operation failed. Check duplicate values, relations and required fields.','error');
  }catch(Throwable $e){ flash($e instanceof InvalidArgumentException?$e->getMessage():'Request failed. Check server logs.','error');if(!($e instanceof InvalidArgumentException))error_log($e->getMessage()); }
- $back=(string)($_POST['_back']??'dashboard');$approved=['dashboard','company','admissions','setup','people','academics','attendance','homework','exams','finance','notices','resources','reports','documents','leave','timetable','login'];
+ $back=(string)($_POST['_back']??'dashboard');$approved=['dashboard','company','admissions','setup','people','academics','attendance','homework','exams','finance','payroll','notices','resources','reports','documents','leave','timetable','login'];
  redirect(in_array($back,$approved,true)?$back:'dashboard');
 }
