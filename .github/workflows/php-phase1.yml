@@ -84,6 +84,7 @@ jobs:
           bash bin/phase4-smoke-http.sh
           bash bin/phase5-payroll-http.sh
           bash bin/phase6-fee-billing-http.sh
+          bash bin/phase7-fee-refunds-http.sh
 
       - name: Prepare clean PHP development source package
         if: success()
@@ -97,6 +98,6 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: campusos-php-monthly-fee-development-preview
+          name: campusos-php-fee-refunds-receipts-preview
           path: phase1-package/
           retention-days: 14
