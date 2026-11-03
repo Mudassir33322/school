@@ -82,6 +82,7 @@ jobs:
           bash bin/phase2-smoke-http.sh
           bash bin/phase3-smoke-http.sh
           bash bin/phase4-smoke-http.sh
+          bash bin/phase5-payroll-http.sh
 
       - name: Prepare clean PHP development source package
         if: success()
@@ -95,6 +96,6 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: campusos-php-transport-inventory-preview
+          name: campusos-php-hr-payroll-development-preview
           path: phase1-package/
           retention-days: 14
