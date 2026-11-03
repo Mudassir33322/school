@@ -95,7 +95,7 @@ function handle_action(): never {
    $academic=['admission_apply','admission_review','admission_enroll','student_move','library_loan','library_return','transport_assign','transport_release','inventory_move','branch','academic_session','class','section','subject','person','student_enrollment','allocation','timetable','notice','library_book','transport_route','inventory_item','certificate'];
    if(in_array($action,$academic,true)&&$u['role']==='accountant')throw new InvalidArgumentException('Accountant access restricted');
    $finance=['fee_invoice','fee_adjustment','payroll','payroll_pay'];
-   if(in_array($action,$finance,true)&&!in_array($u['role'],['admin','accountant'],true))throw new InvalidArgumentException('Finance access restricted');
+   if(in_array($action,$finance,true))require_roles(['admin','accountant']);
   }
   switch($action){
    case 'admission_apply':
