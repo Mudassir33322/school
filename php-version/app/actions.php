@@ -426,7 +426,7 @@ function handle_action(): never {
       [$school,$b,required_text('title'),trim((string)($_POST['author']??'')),trim((string)($_POST['isbn']??'')),positive_id('copies')]);break;
    case 'transport_route':
     $b=positive_id('branch_id');assert_branch($b,$school);
-    if(!allowed_branch($u,$b))throw new InvalidArgumentException('Cannot manage another campus');
+    if($u['role']==='principal' && (int)$u['branch_id']!==$b)throw new InvalidArgumentException('Cannot manage another campus');
     $seats=positive_id('seat_capacity');
     if($seats>120)throw new InvalidArgumentException('Maximum capacity is 120 seats');
     run("INSERT INTO transport_routes(school_id,branch_id,name,vehicle,driver_name,monthly_fee,seat_capacity) VALUES (?,?,?,?,?,?,?)",
@@ -436,7 +436,7 @@ function handle_action(): never {
     db()->beginTransaction();
     try{
      $route=one("SELECT * FROM transport_routes WHERE id=? AND school_id=? FOR UPDATE",[$routeId,$school]);
-     if(!$route||!allowed_branch($u,(int)$route['branch_id']))throw new InvalidArgumentException('Route not available to this campus');
+     if(!$route||($u['role']==='principal' && (int)$u['branch_id']!==(int)$route['branch_id']))throw new InvalidArgumentException('Route not available to this campus');
      $studentProfile=verify_student($school,$studentId);
      if((int)$studentProfile['branch_id']!==(int)$route['branch_id'])throw new InvalidArgumentException('Student and route campuses must match');
      $existing=one("SELECT id FROM transport_assignments WHERE school_id=? AND student_user_id=? AND released_at IS NULL",[$school,$studentId]);
@@ -453,7 +453,7 @@ function handle_action(): never {
     db()->beginTransaction();
     try{
      $assignment=one("SELECT * FROM transport_assignments WHERE id=? AND school_id=? FOR UPDATE",[$assignmentId,$school]);
-     if(!$assignment||!allowed_branch($u,(int)$assignment['branch_id']))throw new InvalidArgumentException('Assignment not accessible');
+     if(!$assignment||($u['role']==='principal' && (int)$u['branch_id']!==(int)$assignment['branch_id']))throw new InvalidArgumentException('Assignment not accessible');
      if($assignment['released_at']!==null)throw new InvalidArgumentException('Assignment already released');
      run("UPDATE transport_assignments SET released_at=NOW(),released_by=? WHERE id=? AND school_id=? AND released_at IS NULL",[$actor,$assignmentId,$school]);
      db()->commit();
@@ -461,7 +461,7 @@ function handle_action(): never {
     break;
    case 'inventory_item':
     $b=positive_id('branch_id');assert_branch($b,$school);
-    if(!allowed_branch($u,$b))throw new InvalidArgumentException('Cannot manage inventory in another campus');
+    if($u['role']==='principal' && (int)$u['branch_id']!==$b)throw new InvalidArgumentException('Cannot manage inventory in another campus');
     $raw=(string)($_POST['quantity']??'0');
     if(!ctype_digit($raw)||(int)$raw>1000000)throw new InvalidArgumentException('Initial stock must be 0 to 1,000,000');
     $initial=(int)$raw;
@@ -487,7 +487,7 @@ function handle_action(): never {
     db()->beginTransaction();
     try{
      $item=one("SELECT * FROM inventory_items WHERE id=? AND school_id=? FOR UPDATE",[$itemId,$school]);
-     if(!$item||!allowed_branch($u,(int)$item['branch_id']))throw new InvalidArgumentException('Inventory item not available to this campus');
+     if(!$item||($u['role']==='principal' && (int)$u['branch_id']!==(int)$item['branch_id']))throw new InvalidArgumentException('Inventory item not available to this campus');
      $before=(int)$item['quantity'];
      $after=$kind==='receipt'?$before+$qty:$before-$qty;
      if($after<0)throw new InvalidArgumentException('Cannot issue more items than current stock');
