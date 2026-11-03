@@ -50,7 +50,7 @@ function rows_table(array $rows,array $cols): void{
  if(!$rows)echo '<tr><td colspan="'.count($cols).'">No records yet.</td></tr>';
  echo '</tbody></table></div>';
 }
-function stat(string $label,string $value,string $icon): void{
+function stat_card(string $label,string $value,string $icon): void{
  echo '<div class="card"><div class="stat-icon">'.h($icon).'</div><p class="stat-label">'.h($label).'</p><p class="stat-value">'.h($value).'</p></div>';
 }
 function count_rows(string $table,int $school): string{
@@ -120,7 +120,7 @@ $navIcons=['dashboard'=>'◈','admissions'=>'▤','setup'=>'⚙','people'=>'♙'
 <?php
 if($vendor){
  $schools=many('SELECT s.id,s.name,s.code,s.delivery_model,s.status,s.created_at,COUNT(b.id) branches FROM schools s LEFT JOIN branches b ON b.school_id=s.id GROUP BY s.id,s.name,s.code,s.delivery_model,s.status,s.created_at ORDER BY s.id DESC');
- echo '<div class="grid">';stat('Registered Schools',(string)count($schools),'▣');stat('Active Schools',(string)count(array_filter($schools,fn($x)=>$x['status']==='active')),'✓');echo '</div>';
+ echo '<div class="grid">';stat_card('Registered Schools',(string)count($schools),'▣');stat_card('Active Schools',(string)count(array_filter($schools,fn($x)=>$x['status']==='active')),'✓');echo '</div>';
  panel('Register New School');form_start('company_school','company');field('School Name','name');field('Unique School Code','code');field('Admin Email','email','email');field('Temporary Admin Password (12+ chars)','password','password');pick('Delivery Model','delivery_model',['saas'=>'SaaS subscription','direct'=>'One-time license']);form_end('Create School');end_panel();
  panel('School Accounts');rows_table($schools,['id'=>'ID','name'=>'School','code'=>'Code','delivery_model'=>'Delivery','status'=>'Status','branches'=>'Branches','created_at'=>'Created']);end_panel();
  panel('Change School Status');form_start('company_status','company');pick('School','school_id',opts($schools));pick('Status','status',['active'=>'Active','suspended'=>'Suspended']);form_end('Update');end_panel();
@@ -128,9 +128,9 @@ if($vendor){
  $d=selection_data($school,$u);$branches=opts($d['branches']);$classes=opts($d['classes']);$sections=opts($d['sections']);$subjects=opts($d['subjects']);$teachers=opts($d['teachers']);$students=opts($d['students']);$parents=opts($d['parents']);
  if($page==='dashboard'){
   echo '<div class="grid">';
-  if($isAdmin||$isFinance){stat('Students',count_rows('student_profiles',$school),'♙');stat('Teachers',(string)(one("SELECT COUNT(*) n FROM users WHERE school_id=? AND role='teacher'",[$school])['n']??0),'♧');stat('Classes',count_rows('classes',$school),'▦');stat('Branches',count_rows('branches',$school),'▣');}
-  elseif($isTeacher){stat('Allocated Classes',(string)(one('SELECT COUNT(*) n FROM teacher_allocations WHERE school_id=? AND teacher_user_id=?',[$school,$u['id']])['n']??0),'▦');stat('Homework Assigned',(string)(one('SELECT COUNT(*) n FROM homework WHERE school_id=? AND teacher_user_id=?',[$school,$u['id']])['n']??0),'✎');}
-  else{stat('Linked Students',(string)count($studentIds),'♙');}
+  if($isAdmin||$isFinance){stat_card('Students',count_rows('student_profiles',$school),'♙');stat_card('Teachers',(string)(one("SELECT COUNT(*) n FROM users WHERE school_id=? AND role='teacher'",[$school])['n']??0),'♧');stat_card('Classes',count_rows('classes',$school),'▦');stat_card('Branches',count_rows('branches',$school),'▣');}
+  elseif($isTeacher){stat_card('Allocated Classes',(string)(one('SELECT COUNT(*) n FROM teacher_allocations WHERE school_id=? AND teacher_user_id=?',[$school,$u['id']])['n']??0),'▦');stat_card('Homework Assigned',(string)(one('SELECT COUNT(*) n FROM homework WHERE school_id=? AND teacher_user_id=?',[$school,$u['id']])['n']??0),'✎');}
+  else{stat_card('Linked Students',(string)count($studentIds),'♙');}
   echo '</div>';
   panel('Recent Notices');
   $aud=$isStudent?'students':($isParent?'parents':($isTeacher?'teachers':'all'));
@@ -268,7 +268,7 @@ if($vendor){
  }
  if($page==='reports'){
   panel('School Summary');
-  echo '<div class="grid">';foreach(['student_profiles'=>'Enrolled Students','attendance'=>'Attendance Entries','homework'=>'Homework','exams'=>'Exams','fee_invoices'=>'Invoices'] as $table=>$label)stat($label,count_rows($table,$school),'▤');echo '</div>';end_panel();
+  echo '<div class="grid">';foreach(['student_profiles'=>'Enrolled Students','attendance'=>'Attendance Entries','homework'=>'Homework','exams'=>'Exams','fee_invoices'=>'Invoices'] as $table=>$label)stat_card($label,count_rows($table,$school),'▤');echo '</div>';end_panel();
   panel('Reporting Note');echo '<p class="muted">These are live database summaries. Full filtered reports, printable export and advanced analytics are scheduled for later phases.</p>';end_panel();
  }
  if($page==='documents'){
