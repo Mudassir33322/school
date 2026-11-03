@@ -62,17 +62,34 @@ function student_filter(string $field,array $ids): array{
  if(!$ids)return ['1=0',[]];
  return [$field.' IN ('.implode(',',array_fill(0,count($ids),'?')).')',$ids];
 }
-function selection_data(int $school): array{
- return [
- 'branches'=>many('SELECT id,CONCAT(name," (",code,")") name FROM branches WHERE school_id=? ORDER BY name',[$school]),
- 'classes'=>many('SELECT id,name FROM classes WHERE school_id=? ORDER BY sort_order,name',[$school]),
- 'sections'=>many('SELECT sections.id,CONCAT(classes.name," / ",sections.name) name FROM sections JOIN classes ON classes.id=sections.class_id WHERE sections.school_id=? ORDER BY classes.name,sections.name',[$school]),
- 'subjects'=>many('SELECT id,name FROM subjects WHERE school_id=? ORDER BY name',[$school]),
- 'teachers'=>many("SELECT id,full_name name FROM users WHERE school_id=? AND role='teacher' AND status='active' ORDER BY full_name",[$school]),
- 'students'=>many("SELECT users.id,CONCAT(users.full_name,' (',student_profiles.admission_no,')') name FROM student_profiles JOIN users ON users.id=student_profiles.user_id WHERE student_profiles.school_id=? ORDER BY users.full_name",[$school]),
- 'parents'=>many("SELECT id,full_name name FROM users WHERE school_id=? AND role='parent' AND status='active' ORDER BY full_name",[$school]),
- 'accounts'=>many("SELECT id,full_name name FROM users WHERE school_id=? AND role='student' AND status='active' ORDER BY full_name",[$school]),
- ];
+function selection_data(int $school, array $user): array{
+ $role=$user['role'];
+ $all=in_array($role,['admin','principal'],true);
+ $teacher=$role==='teacher';
+ $finance=$role==='accountant';
+ $empty=['branches'=>[],'classes'=>[],'sections'=>[],'subjects'=>[],'teachers'=>[],'students'=>[],'parents'=>[],'accounts'=>[]];
+ // Student and parent portals never preload the whole school directory.
+ if(!$all&&!$teacher&&!$finance)return $empty;
+ $data=$empty;
+ if($all){
+  $data['branches']=many('SELECT id,CONCAT(name," (",code,")") name FROM branches WHERE school_id=? ORDER BY name',[$school]);
+  $data['classes']=many('SELECT id,name FROM classes WHERE school_id=? ORDER BY sort_order,name',[$school]);
+  $data['sections']=many('SELECT sections.id,CONCAT(classes.name," / ",sections.name) name FROM sections JOIN classes ON classes.id=sections.class_id WHERE sections.school_id=? ORDER BY classes.name,sections.name',[$school]);
+  $data['subjects']=many('SELECT id,name FROM subjects WHERE school_id=? ORDER BY name',[$school]);
+  $data['teachers']=many("SELECT id,full_name name FROM users WHERE school_id=? AND role='teacher' AND status='active' ORDER BY full_name",[$school]);
+  $data['parents']=many("SELECT id,full_name name FROM users WHERE school_id=? AND role='parent' AND status='active' ORDER BY full_name",[$school]);
+  $data['accounts']=many("SELECT id,full_name name FROM users WHERE school_id=? AND role='student' AND status='active' ORDER BY full_name",[$school]);
+ }
+ if($teacher){
+  $id=(int)$user['id'];
+  $data['classes']=many("SELECT DISTINCT c.id,c.name FROM classes c JOIN teacher_allocations a ON a.class_id=c.id AND a.school_id=c.school_id WHERE a.school_id=? AND a.teacher_user_id=? ORDER BY c.name",[$school,$id]);
+  $data['sections']=many("SELECT DISTINCT s.id,CONCAT(c.name,' / ',s.name) name FROM sections s JOIN classes c ON c.id=s.class_id JOIN teacher_allocations a ON a.section_id=s.id AND a.school_id=s.school_id WHERE a.school_id=? AND a.teacher_user_id=? ORDER BY name",[$school,$id]);
+  $data['subjects']=many("SELECT DISTINCT sub.id,sub.name FROM subjects sub JOIN teacher_allocations a ON a.subject_id=sub.id AND a.school_id=sub.school_id WHERE a.school_id=? AND a.teacher_user_id=? ORDER BY sub.name",[$school,$id]);
+  $data['students']=many("SELECT DISTINCT u.id,CONCAT(u.full_name,' (',sp.admission_no,')') name FROM student_profiles sp JOIN users u ON u.id=sp.user_id AND u.school_id=sp.school_id JOIN teacher_allocations a ON a.school_id=sp.school_id AND a.section_id=sp.section_id AND a.branch_id=sp.branch_id WHERE sp.school_id=? AND a.teacher_user_id=? AND u.status='active' ORDER BY name",[$school,$id]);
+ } elseif($all||$finance){
+  $data['students']=many("SELECT users.id,CONCAT(users.full_name,' (',student_profiles.admission_no,')') name FROM student_profiles JOIN users ON users.id=student_profiles.user_id AND users.school_id=student_profiles.school_id WHERE student_profiles.school_id=? AND users.status='active' ORDER BY users.full_name",[$school]);
+ }
+ return $data;
 }
 if($page==='login'):
  $portal=($_GET['portal']??'school')==='company'?'company':'school';
@@ -105,7 +122,7 @@ if($vendor){
  panel('School Accounts');rows_table($schools,['id'=>'ID','name'=>'School','code'=>'Code','delivery_model'=>'Delivery','status'=>'Status','branches'=>'Branches','created_at'=>'Created']);end_panel();
  panel('Change School Status');form_start('company_status','company');pick('School','school_id',opts($schools));pick('Status','status',['active'=>'Active','suspended'=>'Suspended']);form_end('Update');end_panel();
 }else{
- $d=selection_data($school);$branches=opts($d['branches']);$classes=opts($d['classes']);$sections=opts($d['sections']);$subjects=opts($d['subjects']);$teachers=opts($d['teachers']);$students=opts($d['students']);$parents=opts($d['parents']);
+ $d=selection_data($school,$u);$branches=opts($d['branches']);$classes=opts($d['classes']);$sections=opts($d['sections']);$subjects=opts($d['subjects']);$teachers=opts($d['teachers']);$students=opts($d['students']);$parents=opts($d['parents']);
  if($page==='dashboard'){
   echo '<div class="grid">';
   if($isAdmin||$isFinance){stat('Students',count_rows('student_profiles',$school),'♙');stat('Teachers',(string)(one("SELECT COUNT(*) n FROM users WHERE school_id=? AND role='teacher'",[$school])['n']??0),'♧');stat('Classes',count_rows('classes',$school),'▦');stat('Branches',count_rows('branches',$school),'▣');}
