@@ -298,21 +298,55 @@ if($vendor){
   if($isFinance){
    panel('Issue Fee Invoice');form_start('fee_invoice','finance');pick('Student','student_user_id',$students);field('Invoice No','invoice_no');field('Description','description');field('Amount (PKR)','amount','number');field('Due Date','due_date','date');form_end('Generate Invoice');end_panel();
   }
-  $sql='SELECT fi.id,fi.invoice_no,u.full_name student,fi.description,fi.amount,fi.due_date,fi.billing_month,fi.source,COALESCE((SELECT SUM(fp.amount) FROM fee_payments fp WHERE fp.school_id=fi.school_id AND fp.invoice_id=fi.id),0) paid,COALESCE((SELECT SUM(fa.amount) FROM fee_adjustments fa WHERE fa.school_id=fi.school_id AND fa.invoice_id=fi.id),0) concessions,fi.amount-COALESCE((SELECT SUM(fp2.amount) FROM fee_payments fp2 WHERE fp2.school_id=fi.school_id AND fp2.invoice_id=fi.id),0)-COALESCE((SELECT SUM(fa2.amount) FROM fee_adjustments fa2 WHERE fa2.school_id=fi.school_id AND fa2.invoice_id=fi.id),0) balance FROM fee_invoices fi JOIN users u ON u.id=fi.student_user_id AND u.school_id=fi.school_id WHERE fi.school_id=?';$args=[$school];
+  $grossExpr="COALESCE((SELECT SUM(fp.amount) FROM fee_payments fp WHERE fp.school_id=fi.school_id AND fp.invoice_id=fi.id),0)";
+  $refundExpr="COALESCE((SELECT SUM(fr.amount) FROM fee_refunds fr WHERE fr.school_id=fi.school_id AND fr.invoice_id=fi.id),0)";
+  $concessionExpr="COALESCE((SELECT SUM(fa.amount) FROM fee_adjustments fa WHERE fa.school_id=fi.school_id AND fa.invoice_id=fi.id),0)";
+  $sql="SELECT fi.id,fi.student_user_id,fi.invoice_no,u.full_name student,fi.description,fi.amount,fi.due_date,fi.billing_month,fi.source,($grossExpr-$refundExpr) paid,$refundExpr refunded,$concessionExpr concessions,fi.amount-($grossExpr-$refundExpr)-$concessionExpr balance FROM fee_invoices fi JOIN users u ON u.id=fi.student_user_id AND u.school_id=fi.school_id WHERE fi.school_id=?";$args=[$school];
   if($isStudent||$isParent){[$cond,$a]=student_filter('fi.student_user_id',$studentIds);$sql.=' AND '.$cond;$args=array_merge($args,$a);}
   if($role==='accountant'){$sql.=' AND fi.branch_id=?';$args[]=(int)$u['branch_id'];}
   $sql.=' ORDER BY fi.id DESC LIMIT 200';
   $invoices=many($sql,$args);
-  panel('Student Fee Ledger');rows_table($invoices,['id'=>'ID','invoice_no'=>'Invoice','student'=>'Student','billing_month'=>'Month','source'=>'Source','description'=>'Description','amount'=>'Original','concessions'=>'Concessions','paid'=>'Paid','balance'=>'Balance','due_date'=>'Due']);end_panel();
+  panel('Student Fee Ledger');rows_table($invoices,['id'=>'ID','invoice_no'=>'Invoice','student'=>'Student','billing_month'=>'Month','source'=>'Source','description'=>'Description','amount'=>'Original','concessions'=>'Concessions','paid'=>'Net Paid','refunded'=>'Refunded','balance'=>'Balance','due_date'=>'Due']);end_panel();
   $itemsSql="SELECT fi.invoice_no,u.full_name student,it.item_type,it.description,it.amount FROM fee_invoice_items it JOIN fee_invoices fi ON fi.id=it.invoice_id AND fi.school_id=it.school_id JOIN users u ON u.id=fi.student_user_id AND u.school_id=fi.school_id WHERE it.school_id=?";
   $itemArgs=[$school];
   if($isStudent||$isParent){[$scope,$a]=student_filter('fi.student_user_id',$studentIds);$itemsSql.=' AND '.$scope;$itemArgs=array_merge($itemArgs,$a);}
   if($role==='accountant'){$itemsSql.=' AND fi.branch_id=?';$itemArgs[]=(int)$u['branch_id'];}
   panel('Monthly Invoice Line Items');
   rows_table(many($itemsSql.' ORDER BY it.id DESC LIMIT 250',$itemArgs),['invoice_no'=>'Invoice','student'=>'Student','item_type'=>'Type','description'=>'Charge','amount'=>'Amount (PKR)']);end_panel();
+  $paySql="SELECT fp.id,fp.invoice_id,fi.invoice_no,fi.student_user_id,u.full_name student,fp.amount gross_amount,COALESCE((SELECT SUM(r.amount) FROM fee_refunds r WHERE r.payment_id=fp.id AND r.school_id=fp.school_id),0) refunded,fp.amount-COALESCE((SELECT SUM(r.amount) FROM fee_refunds r WHERE r.payment_id=fp.id AND r.school_id=fp.school_id),0) refundable,fp.mode,fp.reference,fp.created_at FROM fee_payments fp JOIN fee_invoices fi ON fi.id=fp.invoice_id AND fi.school_id=fp.school_id JOIN users u ON u.id=fi.student_user_id AND u.school_id=fi.school_id WHERE fp.school_id=?";
+  $payArgs=[$school];
+  if($isStudent||$isParent){[$cond,$a]=student_filter('fi.student_user_id',$studentIds);$paySql.=' AND '.$cond;$payArgs=array_merge($payArgs,$a);}
+  if($role==='accountant'){$paySql.=' AND fi.branch_id=?';$payArgs[]=(int)$u['branch_id'];}
+  $paymentRows=many($paySql.' ORDER BY fp.id DESC LIMIT 200',$payArgs);
+  panel('Fee Payment History & Receipts');
+  rows_table($paymentRows,['id'=>'Receipt ID','invoice_no'=>'Invoice','student'=>'Student','gross_amount'=>'Received','refunded'=>'Refunded','refundable'=>'Net Retained','mode'=>'Mode','reference'=>'Reference','created_at'=>'Date']);end_panel();
+  panel('Print Fee Receipts and Student Statements');
+  if(!$paymentRows&&!$invoices)echo '<p class="muted">No fee payment records available yet.</p>';
+  foreach($paymentRows as $row){
+    echo '<p><a target="_blank" rel="noopener noreferrer" href="'.h(url('finance',['receipt'=>(int)$row['id']])).'">Print receipt #'.h($row['id']).' — '.h($row['invoice_no']).'</a></p>';
+  }
+  $printedStudents=[];
+  foreach($invoices as $row){
+    $studentId=(int)$row['student_user_id'];
+    if(isset($printedStudents[$studentId]))continue;
+    $printedStudents[$studentId]=true;
+    echo '<p><a target="_blank" rel="noopener noreferrer" href="'.h(url('finance',['statement'=>$studentId])).'">Print student fee statement — '.h($row['student']).'</a></p>';
+  }
+  end_panel();
+  $refundSql="SELECT r.id,fi.invoice_no,u.full_name student,r.payment_id,r.amount,r.mode,r.reference,r.reason,r.created_at FROM fee_refunds r JOIN fee_invoices fi ON fi.id=r.invoice_id AND fi.school_id=r.school_id JOIN users u ON u.id=fi.student_user_id AND u.school_id=fi.school_id WHERE r.school_id=?";
+  $refundArgs=[$school];
+  if($isStudent||$isParent){[$cond,$a]=student_filter('fi.student_user_id',$studentIds);$refundSql.=' AND '.$cond;$refundArgs=array_merge($refundArgs,$a);}
+  if($role==='accountant'){$refundSql.=' AND fi.branch_id=?';$refundArgs[]=(int)$u['branch_id'];}
+  panel('Refund Audit History');
+  rows_table(many($refundSql.' ORDER BY r.id DESC LIMIT 150',$refundArgs),['invoice_no'=>'Invoice','payment_id'=>'Original Payment','student'=>'Student','amount'=>'Refund PKR','mode'=>'Method','reference'=>'Reference','reason'=>'Reason','created_at'=>'Recorded']);end_panel();
   if($isFinance){
    panel('Grant Fee Concession / Scholarship');form_start('fee_adjustment','finance');pick('Invoice','invoice_id',opts($invoices,'id','invoice_no'));pick('Type','adjustment_type',['concession'=>'Concession','scholarship'=>'Scholarship','waiver'=>'Waiver']);field('Amount (PKR)','amount','number');field('Reason','reason');form_end('Approve Adjustment');end_panel();
    panel('Receive Fee Payment');form_start('fee_payment','finance');pick('Invoice','invoice_id',opts($invoices,'id','invoice_no'));field('Amount Received','amount','number');pick('Mode','mode',['cash'=>'Cash','bank'=>'Bank','cheque'=>'Cheque','online_manual'=>'Manual Online']);field('Reference','reference','text','',false);form_end('Record Payment');end_panel();
+   $refundablePayments=array_values(array_filter($paymentRows,fn($p)=>(float)$p['refundable']>0));
+   panel('Record Fee Refund');
+   echo '<p class="muted small">Use only after money has actually been returned. This records an internal refund and increases the outstanding balance; it does not send money.</p>';
+   form_start('fee_refund','finance');pick('Original Payment','payment_id',opts($refundablePayments,'id','invoice_no'));
+   field('Refund Amount (PKR)','amount','number');pick('Refund Method','mode',['cash'=>'Cash','bank'=>'Bank','cheque'=>'Cheque','online_manual'=>'Manual Online']);field('Transaction Reference (non-cash)','reference','text','',false);field('Reason','reason');form_end('Record Refund');end_panel();
   }
  }
  if($page==='payroll'){
