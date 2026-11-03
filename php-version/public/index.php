@@ -172,6 +172,21 @@ if($vendor){
    panel('Create User Account');form_start('person','people');pick('Role','role',['admin'=>'Administrator','principal'=>'Principal','accountant'=>'Accountant','teacher'=>'Teacher','student'=>'Student','parent'=>'Parent','staff'=>'Staff']);pick('Branch','branch_id',$branches);field('Full Name','full_name');field('Email','email','email');field('Password (12+ chars)','password','password');form_end('Create Account');end_panel();
    panel('Enroll Student / Link Parent');form_start('student_enrollment','people');pick('Student Account','student_user_id',opts($d['accounts']));pick('Parent','parent_user_id',$parents,false);pick('Branch','branch_id',$branches);pick('Class','class_id',$classes);pick('Section','section_id',$sections);field('Admission Number','admission_no');field('Roll Number','roll_no','text','',false);form_end('Enroll Student');end_panel();
   }
+  if($isAdmin){
+   panel('Promotion / Section Change / Campus Transfer');
+   echo '<p class="muted small">Select the destination class and section. This keeps previous attendance, grades and fees intact and writes an academic movement history. Activate the current academic session first.</p>';
+   form_start('student_move','people');
+   pick('Enrolled Student','student_user_id',$students);
+   pick('Movement Type','movement_type',['promotion'=>'Promote to new class','section_change'=>'Change section','transfer'=>'Transfer to another campus']);
+   pick('Destination Branch','to_branch_id',$branches);
+   pick('Destination Class','to_class_id',$classes);
+   pick('Destination Section','to_section_id',$sections);
+   field('Reason / Approval Note','reason');
+   form_end('Save Student Movement');end_panel();
+   panel('Student Academic Movement History');
+   rows_table(many("SELECT sm.id,u.full_name student,sm.movement_type,fb.name from_branch,tb.name to_branch,fc.name from_class,tc.name to_class,fs.name from_section,ts.name to_section,y.name academic_year,sm.reason,sm.created_at FROM student_movements sm JOIN users u ON u.id=sm.student_user_id AND u.school_id=sm.school_id JOIN branches fb ON fb.id=sm.from_branch_id JOIN branches tb ON tb.id=sm.to_branch_id JOIN classes fc ON fc.id=sm.from_class_id JOIN classes tc ON tc.id=sm.to_class_id JOIN sections fs ON fs.id=sm.from_section_id JOIN sections ts ON ts.id=sm.to_section_id JOIN school_sessions y ON y.id=sm.academic_session_id WHERE sm.school_id=? ORDER BY sm.id DESC LIMIT 150",[$school]),['student'=>'Student','movement_type'=>'Movement','from_class'=>'Old Class','to_class'=>'New Class','from_section'=>'Old Section','to_section'=>'New Section','from_branch'=>'Old Branch','to_branch'=>'New Branch','academic_year'=>'Session','reason'=>'Reason','created_at'=>'Date']);
+   end_panel();
+  }
   panel('Student Directory');
   $sql="SELECT u.full_name,sp.admission_no,sp.roll_no,c.name class_name,s.name section_name FROM student_profiles sp JOIN users u ON u.id=sp.user_id JOIN classes c ON c.id=sp.class_id JOIN sections s ON s.id=sp.section_id WHERE sp.school_id=? ORDER BY u.full_name";
   rows_table(many($sql,[$school]),['full_name'=>'Student','admission_no'=>'Admission #','roll_no'=>'Roll #','class_name'=>'Class','section_name'=>'Section']);end_panel();
@@ -262,6 +277,15 @@ if($vendor){
  if($page==='resources'){
   panel('Library Catalog');rows_table(many('SELECT title,author,isbn,copies FROM library_books WHERE school_id=?',[$school]),['title'=>'Book','author'=>'Author','isbn'=>'ISBN','copies'=>'Copies']);end_panel();
   panel('Register Book');form_start('library_book','resources');pick('Branch','branch_id',$branches);field('Book Title','title');field('Author','author','text','',false);field('ISBN','isbn','text','',false);field('Copies','copies','number','1');form_end();end_panel();
+  $books=many("SELECT b.id,CONCAT(b.title,' (',br.name,')') name,b.copies,COALESCE((SELECT COUNT(*) FROM library_loans l WHERE l.book_id=b.id AND l.school_id=b.school_id AND l.returned_at IS NULL),0) checked_out FROM library_books b JOIN branches br ON br.id=b.branch_id AND br.school_id=b.school_id WHERE b.school_id=? ORDER BY b.title",[$school]);
+  panel('Library Stock and Availability');rows_table($books,['name'=>'Book / Branch','copies'=>'Total Copies','checked_out'=>'Checked Out']);end_panel();
+  $borrowers=many("SELECT u.id,CONCAT(u.full_name,' (',b.name,')') name FROM users u JOIN branches b ON b.id=u.branch_id AND b.school_id=u.school_id WHERE u.school_id=? AND u.status='active' AND u.role IN ('student','teacher','staff','principal') ORDER BY u.full_name",[$school]);
+  panel('Issue Library Book');form_start('library_loan','resources');pick('Book','book_id',opts($books));pick('Borrower','borrower_user_id',opts($borrowers));field('Return Due Date','due_date','date',date('Y-m-d',strtotime('+14 days')));form_end('Issue Book');end_panel();
+  $activeLoans=many("SELECT l.id,b.title book,u.full_name borrower,br.name campus,l.issue_date,l.due_date,CASE WHEN l.due_date<CURDATE() THEN 'Overdue' ELSE 'On Loan' END status FROM library_loans l JOIN library_books b ON b.id=l.book_id AND b.school_id=l.school_id JOIN users u ON u.id=l.borrower_user_id AND u.school_id=l.school_id JOIN branches br ON br.id=l.branch_id WHERE l.school_id=? AND l.returned_at IS NULL ORDER BY l.due_date,l.id LIMIT 200",[$school]);
+  panel('Active Library Loans');rows_table($activeLoans,['id'=>'Loan ID','book'=>'Book','borrower'=>'Borrower','campus'=>'Campus','issue_date'=>'Issue Date','due_date'=>'Due Date','status'=>'Status']);end_panel();
+  panel('Return Library Book');form_start('library_return','resources');pick('Active Loan','loan_id',opts($activeLoans,'id','book'));form_end('Mark Returned');end_panel();
+  panel('Recent Library Returns');rows_table(many("SELECT b.title book,u.full_name borrower,l.returned_at,l.due_date FROM library_loans l JOIN library_books b ON b.id=l.book_id AND b.school_id=l.school_id JOIN users u ON u.id=l.borrower_user_id AND u.school_id=l.school_id WHERE l.school_id=? AND l.returned_at IS NOT NULL ORDER BY l.returned_at DESC LIMIT 60",[$school]),['book'=>'Book','borrower'=>'Borrower','due_date'=>'Due Date','returned_at'=>'Returned At']);end_panel();
+
   panel('Transport Routes');rows_table(many('SELECT name,vehicle,driver_name,monthly_fee FROM transport_routes WHERE school_id=?',[$school]),['name'=>'Route','vehicle'=>'Vehicle','driver_name'=>'Driver','monthly_fee'=>'Monthly Fee']);end_panel();
   panel('Register Route');form_start('transport_route','resources');pick('Branch','branch_id',$branches);field('Route','name');field('Vehicle','vehicle','text','',false);field('Driver','driver_name','text','',false);field('Monthly Fee','monthly_fee','number','0');form_end();end_panel();
   panel('Inventory');rows_table(many('SELECT name,sku,quantity FROM inventory_items WHERE school_id=?',[$school]),['name'=>'Item','sku'=>'SKU','quantity'=>'Stock']);end_panel();
