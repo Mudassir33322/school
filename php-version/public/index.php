@@ -243,13 +243,14 @@ if($vendor){
   if($isFinance){
    panel('Issue Fee Invoice');form_start('fee_invoice','finance');pick('Student','student_user_id',$students);field('Invoice No','invoice_no');field('Description','description');field('Amount (PKR)','amount','number');field('Due Date','due_date','date');form_end('Generate Invoice');end_panel();
   }
-  $sql='SELECT fi.id,fi.invoice_no,u.full_name student,fi.description,fi.amount,fi.due_date,COALESCE(SUM(fp.amount),0) paid,fi.amount-COALESCE(SUM(fp.amount),0) balance FROM fee_invoices fi JOIN users u ON u.id=fi.student_user_id LEFT JOIN fee_payments fp ON fp.invoice_id=fi.id AND fp.school_id=fi.school_id WHERE fi.school_id=?';$args=[$school];
+  $sql='SELECT fi.id,fi.invoice_no,u.full_name student,fi.description,fi.amount,fi.due_date,COALESCE((SELECT SUM(fp.amount) FROM fee_payments fp WHERE fp.school_id=fi.school_id AND fp.invoice_id=fi.id),0) paid,COALESCE((SELECT SUM(fa.amount) FROM fee_adjustments fa WHERE fa.school_id=fi.school_id AND fa.invoice_id=fi.id),0) concessions,fi.amount-COALESCE((SELECT SUM(fp2.amount) FROM fee_payments fp2 WHERE fp2.school_id=fi.school_id AND fp2.invoice_id=fi.id),0)-COALESCE((SELECT SUM(fa2.amount) FROM fee_adjustments fa2 WHERE fa2.school_id=fi.school_id AND fa2.invoice_id=fi.id),0) balance FROM fee_invoices fi JOIN users u ON u.id=fi.student_user_id AND u.school_id=fi.school_id WHERE fi.school_id=?';$args=[$school];
   if($isStudent||$isParent){[$cond,$a]=student_filter('fi.student_user_id',$studentIds);$sql.=' AND '.$cond;$args=array_merge($args,$a);}
   if($role==='accountant'){$sql.=' AND fi.branch_id=?';$args[]=(int)$u['branch_id'];}
-  $sql.=' GROUP BY fi.id,fi.invoice_no,u.full_name,fi.description,fi.amount,fi.due_date ORDER BY fi.id DESC LIMIT 200';
+  $sql.=' ORDER BY fi.id DESC LIMIT 200';
   $invoices=many($sql,$args);
-  panel('Student Fee Ledger');rows_table($invoices,['id'=>'ID','invoice_no'=>'Invoice','student'=>'Student','description'=>'Description','amount'=>'Total','paid'=>'Paid','balance'=>'Balance','due_date'=>'Due']);end_panel();
+  panel('Student Fee Ledger');rows_table($invoices,['id'=>'ID','invoice_no'=>'Invoice','student'=>'Student','description'=>'Description','amount'=>'Original','concessions'=>'Concessions','paid'=>'Paid','balance'=>'Balance','due_date'=>'Due']);end_panel();
   if($isFinance){
+   panel('Grant Fee Concession / Scholarship');form_start('fee_adjustment','finance');pick('Invoice','invoice_id',opts($invoices,'id','invoice_no'));pick('Type','adjustment_type',['concession'=>'Concession','scholarship'=>'Scholarship','waiver'=>'Waiver']);field('Amount (PKR)','amount','number');field('Reason','reason');form_end('Approve Adjustment');end_panel();
    panel('Receive Fee Payment');form_start('fee_payment','finance');pick('Invoice','invoice_id',opts($invoices,'id','invoice_no'));field('Amount Received','amount','number');pick('Mode','mode',['cash'=>'Cash','bank'=>'Bank','cheque'=>'Cheque','online_manual'=>'Manual Online']);field('Reference','reference','text','',false);form_end('Record Payment');end_panel();
   }
  }
