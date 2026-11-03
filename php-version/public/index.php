@@ -95,6 +95,65 @@ function selection_data(int $school, array $user): array{
  }
  return $data;
 }
+if($page==='finance' && (isset($_GET['receipt'])||isset($_GET['statement']))){
+ $isReceipt=isset($_GET['receipt']);
+ $id=filter_var($isReceipt?$_GET['receipt']:$_GET['statement'],FILTER_VALIDATE_INT,['options'=>['min_range'=>1]]);
+ if(!$id){http_response_code(404);exit('Financial record not found');}
+ if($isReceipt){
+  $p=one("SELECT p.*,fi.invoice_no,fi.student_user_id,fi.branch_id,fi.description,fi.due_date,u.full_name student FROM fee_payments p JOIN fee_invoices fi ON fi.id=p.invoice_id AND fi.school_id=p.school_id JOIN users u ON u.id=fi.student_user_id AND u.school_id=fi.school_id WHERE p.school_id=? AND p.id=?",[$school,(int)$id]);
+  if(!$p || (($isStudent||$isParent)&&!in_array((int)$p['student_user_id'],$studentIds,true)) || ($role==='accountant'&&(int)$u['branch_id']!==(int)$p['branch_id'])){
+   http_response_code(404);exit('Receipt not found or not accessible');
+  }
+  $refundTotal=(float)(one("SELECT COALESCE(SUM(amount),0) total FROM fee_refunds WHERE school_id=? AND payment_id=?",[$school,$id])['total']??0);
+  $printTitle='Fee Payment Receipt #'.$id;
+ }else{
+  $student=one("SELECT u.id,u.full_name,sp.admission_no,sp.branch_id FROM users u JOIN student_profiles sp ON sp.user_id=u.id AND sp.school_id=u.school_id WHERE u.school_id=? AND u.id=? AND u.role='student'",[$school,(int)$id]);
+  if(!$student || (($isStudent||$isParent)&&!in_array((int)$id,$studentIds,true))){
+   http_response_code(404);exit('Statement not found or not accessible');
+  }
+  $statementSql="SELECT fi.invoice_no,fi.description,fi.billing_month,fi.amount,fi.due_date,COALESCE((SELECT SUM(fp.amount) FROM fee_payments fp WHERE fp.school_id=fi.school_id AND fp.invoice_id=fi.id),0) gross_paid,COALESCE((SELECT SUM(fr.amount) FROM fee_refunds fr WHERE fr.school_id=fi.school_id AND fr.invoice_id=fi.id),0) refunded,COALESCE((SELECT SUM(fa.amount) FROM fee_adjustments fa WHERE fa.school_id=fi.school_id AND fa.invoice_id=fi.id),0) concession FROM fee_invoices fi WHERE fi.school_id=? AND fi.student_user_id=?";
+  $statementArgs=[$school,(int)$id];
+  if($role==='accountant'){$statementSql.=' AND fi.branch_id=?';$statementArgs[]=(int)$u['branch_id'];}
+  $statementRows=many($statementSql.' ORDER BY fi.due_date,fi.id',$statementArgs);
+  if(!$statementRows){http_response_code(404);exit('No invoices available for statement');}
+  $overallBalance=0.0;
+  foreach($statementRows as &$sr){
+   $sr['net_paid']=(float)$sr['gross_paid']-(float)$sr['refunded'];
+   $sr['balance']=(float)$sr['amount']-(float)$sr['concession']-$sr['net_paid'];
+   $overallBalance += $sr['balance'];
+  }
+  unset($sr);
+  $printTitle='Student Fee Statement';
+ }
+ ?><!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title><?=h($printTitle)?> | <?=h($u['school_name'])?></title><style>
+ body{font-family:Arial,Helvetica,sans-serif;color:#152344;background:#f0f4fb;padding:32px;margin:0}
+ .sheet{max-width:850px;margin:auto;background:white;padding:36px;border-radius:16px;box-shadow:0 9px 32px #17255415}
+ .top{display:flex;align-items:center;justify-content:space-between;border-bottom:3px solid #4f46e5;padding-bottom:16px;gap:18px}
+ .top h1{margin:0;color:#312e81}.muted{color:#64748b}.total{font-weight:bold;color:#312e81}
+ table{width:100%;border-collapse:collapse;margin-top:20px}th,td{padding:11px 7px;border-bottom:1px solid #e2e8f0;text-align:left;font-size:13px}th{background:#f8fafc}td.num{text-align:right;white-space:nowrap}
+ .btn{border:0;background:#4f46e5;color:white;border-radius:9px;padding:12px 18px;cursor:pointer}.foot{font-size:12px;color:#64748b;margin-top:25px}
+ @media print{body{background:white;padding:0}.sheet{box-shadow:none;border-radius:0;padding:0}.no-print{display:none}}
+ </style></head><body><main class="sheet"><div class="top"><div><h1><?=h($u['school_name'])?></h1><p class="muted"><?=h($printTitle)?></p></div><strong>CampusOS</strong></div>
+ <?php if($isReceipt): ?>
+ <h2>Payment Record #<?=h($p['id'])?></h2>
+ <p><strong>Student:</strong> <?=h($p['student'])?></p>
+ <p><strong>Invoice:</strong> <?=h($p['invoice_no'])?> — <?=h($p['description'])?></p>
+ <p><strong>Recorded:</strong> <?=h($p['created_at'])?></p>
+ <p><strong>Method:</strong> <?=h($p['mode'])?> | <strong>Reference:</strong> <?=h($p['reference']?:'Not supplied')?></p>
+ <table><tr><th>Description</th><th>PKR</th></tr><tr><td>Original payment received</td><td class="num"><?=h(number_format((float)$p['amount'],2))?></td></tr><tr><td>Subsequent refunds</td><td class="num">-<?=h(number_format($refundTotal,2))?></td></tr><tr><td class="total">Net retained against this payment</td><td class="num total"><?=h(number_format((float)$p['amount']-$refundTotal,2))?></td></tr></table>
+ <?php else: ?>
+ <h2>Student Fee Statement</h2><p><strong>Student:</strong> <?=h($student['full_name'])?> | <strong>Admission #:</strong> <?=h($student['admission_no'])?></p>
+ <table><thead><tr><th>Invoice</th><th>Month / Due</th><th>Charge</th><th>Concessions</th><th>Refunds</th><th>Net Paid</th><th>Balance</th></tr></thead><tbody>
+ <?php foreach($statementRows as $sr): ?>
+ <tr><td><?=h($sr['invoice_no'])?></td><td><?=h($sr['billing_month']?:'Manual')?> / <?=h($sr['due_date'])?></td><td class="num"><?=h(number_format((float)$sr['amount'],2))?></td><td class="num"><?=h(number_format((float)$sr['concession'],2))?></td><td class="num"><?=h(number_format((float)$sr['refunded'],2))?></td><td class="num"><?=h(number_format((float)$sr['net_paid'],2))?></td><td class="num"><?=h(number_format((float)$sr['balance'],2))?></td></tr>
+ <?php endforeach; ?>
+ <tr><td colspan="6" class="total">Total Outstanding (PKR)</td><td class="num total"><?=h(number_format($overallBalance,2))?></td></tr></tbody></table>
+ <?php endif; ?>
+ <p class="foot">Generated from the school's internal fee records. Manual payment/refund entries do not independently verify bank settlement.</p>
+ <p class="no-print"><button class="btn" onclick="window.print()">Print <?=h($isReceipt?'Receipt':'Statement')?></button></p>
+ </main></body></html><?php
+ exit;
+}
 if($page==='payroll' && isset($_GET['print'])){
  $printId=filter_var($_GET['print'],FILTER_VALIDATE_INT,['options'=>['min_range'=>1]]);
  if(!$printId){http_response_code(404);exit('Payslip not found');}
