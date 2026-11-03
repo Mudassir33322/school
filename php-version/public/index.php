@@ -562,7 +562,34 @@ if($vendor){
  if($page==='reports'){
   panel('School Summary');
   echo '<div class="grid">';foreach(['student_profiles'=>'Enrolled Students','attendance'=>'Attendance Entries','homework'=>'Homework','exams'=>'Exams','fee_invoices'=>'Invoices'] as $table=>$label)stat_card($label,count_rows($table,$school),'▤');echo '</div>';end_panel();
-  panel('Reporting Note');echo '<p class="muted">These are live database summaries. Full filtered reports, printable export and advanced analytics are scheduled for later phases.</p>';end_panel();
+  if(in_array($role,['admin','principal','accountant'],true)){
+   $scopeSql=" WHERE fi.school_id=?";
+   $scopeArgs=[$school];
+   if($role!=='admin'){$scopeSql.=' AND fi.branch_id=?';$scopeArgs[]=(int)$u['branch_id'];}
+   $grossP="COALESCE((SELECT SUM(fp.amount) FROM fee_payments fp WHERE fp.school_id=fi.school_id AND fp.invoice_id=fi.id),0)";
+   $refP="COALESCE((SELECT SUM(fr.amount) FROM fee_refunds fr WHERE fr.school_id=fi.school_id AND fr.invoice_id=fi.id),0)";
+   $discP="COALESCE((SELECT SUM(fa.amount) FROM fee_adjustments fa WHERE fa.school_id=fi.school_id AND fa.invoice_id=fi.id),0)";
+   $fin=one("SELECT COUNT(*) invoices,COALESCE(SUM(fi.amount),0) billed,COALESCE(SUM($grossP),0) received,COALESCE(SUM($refP),0) refunded,COALESCE(SUM($discP),0) discounts,COALESCE(SUM(fi.amount-($grossP-$refP)-$discP),0) outstanding FROM fee_invoices fi".$scopeSql,$scopeArgs);
+   panel('Financial Reconciliation — Internal Records');
+   echo '<p class="muted small">School/campus amounts in PKR. Net collections = receipts − refunds. Outstanding = invoices − discounts − net collections. These are internal records, not verified bank settlements.</p>';
+   echo '<div class="grid">';
+   foreach(['billed'=>'Gross Invoiced','received'=>'Payments Recorded','refunded'=>'Refunds Recorded','discounts'=>'Concessions','outstanding'=>'Outstanding'] as $key=>$label)
+    stat_card($label,'PKR '.number_format((float)$fin[$key],2),'₨');
+   echo '</div>';end_panel();
+   $cashSql="SELECT 'Payment' entry_type,fp.id record_id,fi.invoice_no,u.full_name student,fp.amount signed_amount,fp.mode,fp.reference,fp.created_at recorded_at FROM fee_payments fp JOIN fee_invoices fi ON fi.id=fp.invoice_id AND fi.school_id=fp.school_id JOIN users u ON u.id=fi.student_user_id AND u.school_id=fi.school_id WHERE fp.school_id=?";
+   $cashArgs=[$school];
+   if($role!=='admin'){$cashSql.=' AND fi.branch_id=?';$cashArgs[]=(int)$u['branch_id'];}
+   $refundSql="SELECT 'Refund' entry_type,r.id record_id,fi.invoice_no,u.full_name student,-r.amount signed_amount,r.mode,r.reference,r.created_at recorded_at FROM fee_refunds r JOIN fee_invoices fi ON fi.id=r.invoice_id AND fi.school_id=r.school_id JOIN users u ON u.id=fi.student_user_id AND u.school_id=fi.school_id WHERE r.school_id=?";
+   $refundArgs=[$school];
+   if($role!=='admin'){$refundSql.=' AND fi.branch_id=?';$refundArgs[]=(int)$u['branch_id'];}
+   panel('Receipts & Refunds — Cash Movement Register');
+   rows_table(many('SELECT * FROM ('.$cashSql.' UNION ALL '.$refundSql.') ledger ORDER BY recorded_at DESC,record_id DESC LIMIT 200',array_merge($cashArgs,$refundArgs)),['entry_type'=>'Entry','record_id'=>'Record','invoice_no'=>'Invoice','student'=>'Student','signed_amount'=>'Signed Amount (PKR)','mode'=>'Mode','reference'=>'Reference','recorded_at'=>'Recorded']);end_panel();
+   $arrearsExpr="fi.amount-($grossP-$refP)-$discP";
+   $overdue=many("SELECT fi.invoice_no,u.full_name student,fi.due_date,fi.amount,$arrearsExpr balance FROM fee_invoices fi JOIN users u ON u.id=fi.student_user_id AND u.school_id=fi.school_id".$scopeSql." AND fi.due_date<CURDATE() AND $arrearsExpr > 0.005 ORDER BY fi.due_date,fi.id LIMIT 100",$scopeArgs);
+   panel('Overdue Invoices');
+   rows_table($overdue,['invoice_no'=>'Invoice','student'=>'Student','due_date'=>'Due Date','amount'=>'Original PKR','balance'=>'Outstanding PKR']);end_panel();
+  }
+  panel('Reporting Notes');echo '<p class="muted">Internal live totals only. Bank statement matching, formal double-entry general ledger, statutory accounting and downloadable financial reports are not implemented yet.</p>';end_panel();
  }
  if($page==='documents'){
   if($isAdmin){panel('Issue Certificate');form_start('certificate','documents');pick('Student','student_user_id',$students);field('Certificate Title','title');echo '<div class="field"><label>Certificate Body</label><textarea name="body" required></textarea></div>';field('Issue Date','issued_on','date',date('Y-m-d'));form_end('Issue');end_panel();}
