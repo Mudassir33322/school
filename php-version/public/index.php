@@ -272,14 +272,14 @@ if($vendor){
   }
   panel('Teaching Allocations');
   $sql='SELECT u.full_name teacher,c.name class_name,s.name section_name,sub.name subject FROM teacher_allocations ta JOIN users u ON u.id=ta.teacher_user_id JOIN classes c ON c.id=ta.class_id JOIN sections s ON s.id=ta.section_id JOIN subjects sub ON sub.id=ta.subject_id WHERE ta.school_id=?';
-  $args=[$school];if($isTeacher){$sql.=' AND ta.teacher_user_id=?';$args[]=$u['id'];}
+  $args=[$school];if($role==='principal'){$sql.=' AND ta.branch_id=?';$args[]=(int)$u['branch_id'];}if($isTeacher){$sql.=' AND ta.teacher_user_id=?';$args[]=$u['id'];}
   rows_table(many($sql.' ORDER BY c.name,s.name',$args),['teacher'=>'Teacher','class_name'=>'Class','section_name'=>'Section','subject'=>'Subject']);end_panel();
  }
  if($page==='timetable'){
   if($isAdmin){
    panel('Schedule Class Period');form_start('timetable','timetable');pick('Class','class_id',$classes);pick('Section','section_id',$sections);pick('Subject','subject_id',$subjects);pick('Teacher','teacher_user_id',$teachers);pick('Weekday','weekday',['1'=>'Monday','2'=>'Tuesday','3'=>'Wednesday','4'=>'Thursday','5'=>'Friday','6'=>'Saturday','7'=>'Sunday']);field('Period Number','period_no','number');field('Start Time','start_time','time');field('End Time','end_time','time');form_end();end_panel();
   }
-  $sql='SELECT c.name class_name,s.name section_name,sub.name subject,u.full_name teacher,t.weekday,t.period_no,t.start_time,t.end_time FROM timetable t JOIN classes c ON c.id=t.class_id JOIN sections s ON s.id=t.section_id JOIN subjects sub ON sub.id=t.subject_id JOIN users u ON u.id=t.teacher_user_id WHERE t.school_id=?';$args=[$school];
+  $sql='SELECT c.name class_name,s.name section_name,sub.name subject,u.full_name teacher,t.weekday,t.period_no,t.start_time,t.end_time FROM timetable t JOIN classes c ON c.id=t.class_id JOIN sections s ON s.id=t.section_id JOIN subjects sub ON sub.id=t.subject_id JOIN users u ON u.id=t.teacher_user_id WHERE t.school_id=?';$args=[$school];if($role==='principal'){$sql.=' AND t.branch_id=?';$args[]=(int)$u['branch_id'];}
   if($isTeacher){$sql.=' AND t.teacher_user_id=?';$args[]=$u['id'];}
   if($isStudent||$isParent){[$cond,$studentArgs]=student_filter('sp.user_id',$studentIds);$sql.=' AND EXISTS (SELECT 1 FROM student_profiles sp WHERE sp.school_id=t.school_id AND sp.section_id=t.section_id AND '.$cond.')';$args=array_merge($args,$studentArgs);}
   panel('Weekly Timetable');rows_table(many($sql.' ORDER BY t.weekday,t.period_no',$args),['class_name'=>'Class','section_name'=>'Section','subject'=>'Subject','teacher'=>'Teacher','weekday'=>'Weekday','period_no'=>'Period','start_time'=>'Start','end_time'=>'End']);end_panel();
@@ -288,7 +288,7 @@ if($vendor){
   if($isAdmin||$isTeacher){
    panel('Mark Student Attendance');form_start('attendance','attendance');pick('Student','student_user_id',$students);field('Date','day','date',date('Y-m-d'));pick('Status','status',['present'=>'Present','absent'=>'Absent','late'=>'Late','leave'=>'Leave']);form_end();end_panel();
   }
-  $sql='SELECT u.full_name student,a.day,a.status,c.name class_name,s.name section_name FROM attendance a JOIN users u ON u.id=a.student_user_id JOIN classes c ON c.id=a.class_id JOIN sections s ON s.id=a.section_id WHERE a.school_id=?';$args=[$school];
+  $sql='SELECT u.full_name student,a.day,a.status,c.name class_name,s.name section_name FROM attendance a JOIN users u ON u.id=a.student_user_id JOIN classes c ON c.id=a.class_id JOIN sections s ON s.id=a.section_id WHERE a.school_id=?';$args=[$school];if($role==='principal'){$sql.=' AND a.branch_id=?';$args[]=(int)$u['branch_id'];}
   if($isTeacher){$sql.=' AND EXISTS(SELECT 1 FROM teacher_allocations ta WHERE ta.school_id=a.school_id AND ta.section_id=a.section_id AND ta.teacher_user_id=?)';$args[]=$u['id'];}
   if($isStudent||$isParent){[$cond,$a]=student_filter('a.student_user_id',$studentIds);$sql.=' AND '.$cond;$args=array_merge($args,$a);}
   panel('Attendance Register');rows_table(many($sql.' ORDER BY a.day DESC LIMIT 250',$args),['student'=>'Student','day'=>'Date','status'=>'Status','class_name'=>'Class','section_name'=>'Section']);end_panel();
@@ -297,7 +297,7 @@ if($vendor){
   if($isAdmin||$isTeacher){
    panel('Assign Homework');form_start('homework','homework');pick('Class','class_id',$classes);pick('Section','section_id',$sections);pick('Subject','subject_id',$subjects);if($isAdmin)pick('Assigned Teacher','teacher_user_id',$teachers);field('Title','title');echo '<div class="field"><label>Instructions</label><textarea name="instructions" required></textarea></div>';field('Due At','due_at','datetime-local');field('Close At','close_at','datetime-local');field('Maximum Marks','max_marks','number','10');form_end();end_panel();
   }
-  $sql='SELECT hw.id,hw.title,hw.instructions,c.name class_name,s.name section_name,sub.name subject,hw.due_at,hw.close_at,hw.max_marks FROM homework hw JOIN classes c ON c.id=hw.class_id JOIN sections s ON s.id=hw.section_id JOIN subjects sub ON sub.id=hw.subject_id WHERE hw.school_id=?';$args=[$school];
+  $sql='SELECT hw.id,hw.title,hw.instructions,c.name class_name,s.name section_name,sub.name subject,hw.due_at,hw.close_at,hw.max_marks FROM homework hw JOIN classes c ON c.id=hw.class_id JOIN sections s ON s.id=hw.section_id JOIN subjects sub ON sub.id=hw.subject_id WHERE hw.school_id=?';$args=[$school];if($role==='principal'){$sql.=' AND hw.branch_id=?';$args[]=(int)$u['branch_id'];}
   if($isTeacher){$sql.=' AND EXISTS(SELECT 1 FROM teacher_allocations ta WHERE ta.school_id=hw.school_id AND ta.section_id=hw.section_id AND ta.subject_id=hw.subject_id AND ta.teacher_user_id=?)';$args[]=$u['id'];}
   if($isStudent||$isParent){[$cond,$a]=student_filter('sp.user_id',$studentIds);$sql.=' AND EXISTS(SELECT 1 FROM student_profiles sp WHERE sp.school_id=hw.school_id AND sp.section_id=hw.section_id AND '.$cond.')';$args=array_merge($args,$a);}
   $homework=many($sql.' ORDER BY hw.id DESC LIMIT 100',$args);
@@ -306,7 +306,7 @@ if($vendor){
    panel('Submit Homework');form_start('homework_submit','homework');pick('Assignment','homework_id',opts($homework,'id','title'));echo '<div class="field"><label>Your Work</label><textarea name="answer_text" required></textarea></div>';form_end('Submit');end_panel();
   }
   if($isTeacher||$isAdmin){
-   $subs=many('SELECT hs.id,us.full_name student,hw.title assignment,hs.submitted_at,hs.marks FROM homework_submissions hs JOIN homework hw ON hw.id=hs.homework_id JOIN users us ON us.id=hs.student_user_id WHERE hs.school_id=? '.($isTeacher?'AND hw.teacher_user_id=? ':'').'ORDER BY hs.submitted_at DESC LIMIT 100',$isTeacher?[$school,$u['id']]:[$school]);
+   $submissionSql='SELECT hs.id,us.full_name student,hw.title assignment,hs.submitted_at,hs.marks FROM homework_submissions hs JOIN homework hw ON hw.id=hs.homework_id AND hw.school_id=hs.school_id JOIN users us ON us.id=hs.student_user_id AND us.school_id=hs.school_id WHERE hs.school_id=?';$submissionArgs=[$school];if($isTeacher){$submissionSql.=' AND hw.teacher_user_id=?';$submissionArgs[]=(int)$u['id'];}if($role==='principal'){$submissionSql.=' AND hw.branch_id=?';$submissionArgs[]=(int)$u['branch_id'];}$subs=many($submissionSql.' ORDER BY hs.submitted_at DESC LIMIT 100',$submissionArgs);
    panel('Student Submissions');rows_table($subs,['id'=>'ID','student'=>'Student','assignment'=>'Assignment','submitted_at'=>'Submitted','marks'=>'Marks']);end_panel();
    panel('Grade Submission');form_start('homework_grade','homework');pick('Submission','submission_id',opts($subs,'id','student'));field('Marks','marks','number');field('Feedback','feedback','text','',false);form_end('Grade');end_panel();
   }
@@ -315,7 +315,7 @@ if($vendor){
   if($isAdmin||$isTeacher){
    panel('Create Exam');form_start('exam','exams');pick('Class','class_id',$classes);pick('Section','section_id',$sections);pick('Subject','subject_id',$subjects);field('Exam Name','title');field('Date','exam_date','date');field('Maximum Marks','max_marks','number','100');field('Passing Marks','passing_marks','number','33');form_end();end_panel();
   }
-  $sql='SELECT e.id,e.title,c.name class_name,s.name section_name,sub.name subject,e.exam_date,e.max_marks,e.published FROM exams e JOIN classes c ON c.id=e.class_id JOIN sections s ON s.id=e.section_id JOIN subjects sub ON sub.id=e.subject_id WHERE e.school_id=?';$args=[$school];
+  $sql='SELECT e.id,e.title,c.name class_name,s.name section_name,sub.name subject,e.exam_date,e.max_marks,e.published FROM exams e JOIN classes c ON c.id=e.class_id JOIN sections s ON s.id=e.section_id JOIN subjects sub ON sub.id=e.subject_id WHERE e.school_id=?';$args=[$school];if($role==='principal'){$sql.=' AND e.branch_id=?';$args[]=(int)$u['branch_id'];}
   if($isTeacher){$sql.=' AND EXISTS(SELECT 1 FROM teacher_allocations ta WHERE ta.school_id=e.school_id AND ta.section_id=e.section_id AND ta.subject_id=e.subject_id AND ta.teacher_user_id=?)';$args[]=$u['id'];}
   if($isStudent||$isParent){[$cond,$a]=student_filter('sp.user_id',$studentIds);$sql.=' AND e.published=1 AND EXISTS(SELECT 1 FROM student_profiles sp WHERE sp.school_id=e.school_id AND sp.section_id=e.section_id AND '.$cond.')';$args=array_merge($args,$a);}
   $exams=many($sql.' ORDER BY e.exam_date DESC LIMIT 100',$args);
@@ -324,7 +324,7 @@ if($vendor){
    panel('Record Marks');form_start('exam_mark','exams');pick('Exam','exam_id',opts($exams,'id','title'));pick('Student','student_user_id',$students);field('Obtained Marks','marks','number');form_end('Record Marks');end_panel();
   }
   if($isAdmin){panel('Publish Exam Result');form_start('publish_exam','exams');pick('Exam','exam_id',opts($exams,'id','title'));form_end('Publish Results');end_panel();}
-  $sql='SELECT u.full_name student,e.title exam,er.marks,e.max_marks,IF(er.marks>=e.passing_marks,"Pass","Fail") outcome FROM exam_results er JOIN exams e ON e.id=er.exam_id JOIN users u ON u.id=er.student_user_id WHERE er.school_id=?';$args=[$school];
+  $sql='SELECT u.full_name student,e.title exam,er.marks,e.max_marks,IF(er.marks>=e.passing_marks,"Pass","Fail") outcome FROM exam_results er JOIN exams e ON e.id=er.exam_id JOIN users u ON u.id=er.student_user_id WHERE er.school_id=?';$args=[$school];if($role==='principal'){$sql.=' AND e.branch_id=?';$args[]=(int)$u['branch_id'];}
   if($isStudent||$isParent){[$cond,$a]=student_filter('er.student_user_id',$studentIds);$sql.=' AND e.published=1 AND '.$cond;$args=array_merge($args,$a);}
   if($isTeacher){$sql.=' AND EXISTS(SELECT 1 FROM teacher_allocations ta WHERE ta.school_id=e.school_id AND ta.section_id=e.section_id AND ta.teacher_user_id=?)';$args[]=$u['id'];}
   panel('Results');rows_table(many($sql.' ORDER BY er.id DESC LIMIT 200',$args),['student'=>'Student','exam'=>'Exam','marks'=>'Marks','max_marks'=>'Out of','outcome'=>'Outcome']);end_panel();
@@ -562,8 +562,8 @@ if($vendor){
    }
  }
  if($page==='reports'){
-  panel('School Summary');
-  echo '<div class="grid">';foreach(['student_profiles'=>'Enrolled Students','attendance'=>'Attendance Entries','homework'=>'Homework','exams'=>'Exams','fee_invoices'=>'Invoices'] as $table=>$label)stat_card($label,count_rows($table,$school),'▤');echo '</div>';end_panel();
+  if($role==='admin'){panel('School Summary');
+  echo '<div class="grid">';foreach(['student_profiles'=>'Enrolled Students','attendance'=>'Attendance Entries','homework'=>'Homework','exams'=>'Exams','fee_invoices'=>'Invoices'] as $table=>$label)stat_card($label,count_rows($table,$school),'▤');echo '</div>';end_panel();}
   if(in_array($role,['admin','principal','accountant'],true)){
    $scopeSql=" WHERE fi.school_id=?";
    $scopeArgs=[$school];
@@ -595,18 +595,18 @@ if($vendor){
  }
  if($page==='documents'){
   if($isAdmin){panel('Issue Certificate');form_start('certificate','documents');pick('Student','student_user_id',$students);field('Certificate Title','title');echo '<div class="field"><label>Certificate Body</label><textarea name="body" required></textarea></div>';field('Issue Date','issued_on','date',date('Y-m-d'));form_end('Issue');end_panel();}
-  $sql='SELECT u.full_name student,c.title,c.body,c.issued_on FROM certificates c JOIN users u ON u.id=c.student_user_id WHERE c.school_id=?';$args=[$school];
+  $sql='SELECT u.full_name student,c.title,c.body,c.issued_on FROM certificates c JOIN users u ON u.id=c.student_user_id WHERE c.school_id=?';$args=[$school];if($role==='principal'){$sql.=' AND EXISTS(SELECT 1 FROM student_profiles sp WHERE sp.school_id=c.school_id AND sp.user_id=c.student_user_id AND sp.branch_id=?)';$args[]=(int)$u['branch_id'];}
   if($isStudent||$isParent){[$cond,$a]=student_filter('c.student_user_id',$studentIds);$sql.=' AND '.$cond;$args=array_merge($args,$a);}
   panel('Issued Certificates');rows_table(many($sql.' ORDER BY c.id DESC',$args),['student'=>'Student','title'=>'Certificate','body'=>'Text','issued_on'=>'Issued']);end_panel();
   if($isAdmin){
    panel('Student ID Cards');echo '<div class="no-print"><button class="btn" onclick="window.print()">Print Cards</button></div>';
-   foreach(many('SELECT u.full_name,c.name class_name,s.name section_name,sp.admission_no FROM student_profiles sp JOIN users u ON u.id=sp.user_id JOIN classes c ON c.id=sp.class_id JOIN sections s ON s.id=sp.section_id WHERE sp.school_id=? ORDER BY u.full_name LIMIT 100',[$school]) as $row) echo '<div class="id-card"><header>'.h($u['school_name']).'</header><h2>'.h($row['full_name']).'</h2><p>'.h($row['class_name'].' - '.$row['section_name']).'</p><p>Admission: '.h($row['admission_no']).'</p></div>';
+   $cardSql='SELECT u.full_name,c.name class_name,s.name section_name,sp.admission_no FROM student_profiles sp JOIN users u ON u.id=sp.user_id JOIN classes c ON c.id=sp.class_id JOIN sections s ON s.id=sp.section_id WHERE sp.school_id=?';$cardArgs=[$school];if($role==='principal'){$cardSql.=' AND sp.branch_id=?';$cardArgs[]=(int)$u['branch_id'];}foreach(many($cardSql.' ORDER BY u.full_name LIMIT 100',$cardArgs) as $row) echo '<div class="id-card"><header>'.h($u['school_name']).'</header><h2>'.h($row['full_name']).'</h2><p>'.h($row['class_name'].' - '.$row['section_name']).'</p><p>Admission: '.h($row['admission_no']).'</p></div>';
    end_panel();
   }
  }
  if($page==='leave'){
   panel('Apply for Leave');form_start('leave','leave');field('From','start_date','date');field('To','end_date','date');echo '<div class="field"><label>Reason</label><textarea name="reason" required></textarea></div>';form_end('Send Request');end_panel();
-  $sql='SELECT l.id,u.full_name applicant,l.start_date,l.end_date,l.reason,l.status FROM leave_requests l JOIN users u ON u.id=l.user_id WHERE l.school_id=?';$args=[$school];if(!$isAdmin){$sql.=' AND l.user_id=?';$args[]=$u['id'];}
+  $sql='SELECT l.id,u.full_name applicant,l.start_date,l.end_date,l.reason,l.status FROM leave_requests l JOIN users u ON u.id=l.user_id WHERE l.school_id=?';$args=[$school];if($role==='principal'){$sql.=' AND u.branch_id=?';$args[]=(int)$u['branch_id'];}elseif(!$isAdmin){$sql.=' AND l.user_id=?';$args[]=$u['id'];}
   $requests=many($sql.' ORDER BY l.id DESC LIMIT 100',$args);
   panel('Leave Requests');rows_table($requests,['id'=>'ID','applicant'=>'Applicant','start_date'=>'Start','end_date'=>'End','reason'=>'Reason','status'=>'Status']);end_panel();
   if($isAdmin){panel('Approve / Reject');form_start('leave_decide','leave');pick('Request','request_id',opts($requests,'id','applicant'));pick('Decision','status',['approved'=>'Approve','rejected'=>'Reject']);form_end('Save Decision');end_panel();}
