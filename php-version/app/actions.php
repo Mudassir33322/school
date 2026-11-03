@@ -120,7 +120,7 @@ function handle_action(): never {
     $r=(string)($_POST['role']??'');$name=required_text('full_name');$email=strtolower(required_text('email'));
     $pw=(string)($_POST['password']??'');$b=positive_id('branch_id');
     if(!in_array($r,['admin','principal','accountant','teacher','student','parent','staff'],true)||strlen($pw)<12||!filter_var($email,FILTER_VALIDATE_EMAIL))throw new InvalidArgumentException('Invalid role, email or password (minimum 12 characters)');
-    assert_branch($b,$school);run("INSERT INTO users(school_id,branch_id,role,full_name,email,password_hash) VALUES (?,?,?,?,?,?)",[$school,$b,$r,$name,$email,password_hash($pw,PASSWORD_DEFAULT)]);
+    assert_branch($b,$school);if($r==='admin' && $u['role']!=='admin')throw new InvalidArgumentException('Only school admin can create another admin');run("INSERT INTO users(school_id,branch_id,role,full_name,email,password_hash) VALUES (?,?,?,?,?,?)",[$school,$b,$r,$name,$email,password_hash($pw,PASSWORD_DEFAULT)]);
     break;
    case 'student_enrollment':
     $id=positive_id('student_user_id');$parent=($_POST['parent_user_id']??'')!==''?positive_id('parent_user_id'):null;
@@ -136,11 +136,15 @@ function handle_action(): never {
     $teacher=positive_id('teacher_user_id');$c=positive_id('class_id');$s=positive_id('section_id');$sub=positive_id('subject_id');
     school_user($teacher,$school,'teacher');ownership('classes',$c,$school);ownership('subjects',$sub,$school);
     $section=verify_section($school,$s,$c);$b=(int)$section['branch_id'];
+    $teacherAccount=school_user($teacher,$school,'teacher');
+    if((int)$teacherAccount['branch_id']!==$b)throw new InvalidArgumentException('Teacher belongs to a different branch');
     run("INSERT INTO teacher_allocations(school_id,branch_id,teacher_user_id,class_id,section_id,subject_id) VALUES (?,?,?,?,?,?)",[$school,$b,$teacher,$c,$s,$sub]);break;
    case 'timetable':
     $c=positive_id('class_id');$s=positive_id('section_id');$sub=positive_id('subject_id');$teacher=positive_id('teacher_user_id');
     ownership('classes',$c,$school);ownership('subjects',$sub,$school);school_user($teacher,$school,'teacher');
     $section=verify_section($school,$s,$c);$b=(int)$section['branch_id'];
+    $teacherAccount=school_user($teacher,$school,'teacher');
+    if((int)$teacherAccount['branch_id']!==$b)throw new InvalidArgumentException('Teacher belongs to a different branch');
     if(!is_teacher_assigned(['id'=>$teacher,'role'=>'teacher','school_id'=>$school],$c,$s,$sub))throw new InvalidArgumentException('Teacher must first be allocated');
     $day=positive_id('weekday');$period=positive_id('period_no');
     if($day>7||$period>20)throw new InvalidArgumentException('Invalid day or period');
@@ -160,7 +164,7 @@ function handle_action(): never {
     require_roles(['admin','principal','teacher']);
     $c=positive_id('class_id');$s=positive_id('section_id');$sub=positive_id('subject_id');
     ownership('classes',$c,$school);ownership('subjects',$sub,$school);$section=verify_section($school,$s,$c);
-    if(!is_teacher_assigned($u,$c,$s,$sub))throw new InvalidArgumentException('Not assigned to this subject');
+    if(!is_teacher_assigned($u,$c,$s,$sub)||!allowed_branch($u,(int)$section['branch_id']))throw new InvalidArgumentException('Not assigned to this subject / branch');
     $due=required_text('due_at',20);$close=required_text('close_at',20);
     if(!strtotime($due)||!strtotime($close)||strtotime($close)<strtotime($due))throw new InvalidArgumentException('Closing time must follow due time');
     $max=money_input('max_marks');if($max<=0||$max>1000)throw new InvalidArgumentException('Invalid max marks');
@@ -186,7 +190,7 @@ function handle_action(): never {
     require_roles(['admin','principal','teacher']);
     $c=positive_id('class_id');$s=positive_id('section_id');$sub=positive_id('subject_id');ownership('classes',$c,$school);ownership('subjects',$sub,$school);
     $section=verify_section($school,$s,$c);
-    if(!is_teacher_assigned($u,$c,$s,$sub))throw new InvalidArgumentException('Not assigned');
+    if(!is_teacher_assigned($u,$c,$s,$sub)||!allowed_branch($u,(int)$section['branch_id']))throw new InvalidArgumentException('Not assigned to this subject / branch');
     $max=money_input('max_marks');$passing=money_input('passing_marks');
     if($max<=0||$passing>$max)throw new InvalidArgumentException('Invalid marks');
     run("INSERT INTO exams(school_id,branch_id,class_id,section_id,subject_id,title,exam_date,max_marks,passing_marks) VALUES (?,?,?,?,?,?,?,?,?)",
@@ -216,7 +220,9 @@ function handle_action(): never {
     if(!in_array($mode,['cash','bank','cheque','online_manual'],true)||$amount<=0)throw new InvalidArgumentException('Invalid payment');
     db()->beginTransaction();
     try{
-     $paid=(float)(one("SELECT COALESCE(SUM(amount),0) amt FROM fee_payments WHERE school_id=? AND invoice_id=? FOR UPDATE",[$school,$invoice['id']])['amt']??0);
+     // Lock parent invoice row, not an aggregate result, to serialize concurrent payments.
+     one("SELECT id FROM fee_invoices WHERE id=? AND school_id=? FOR UPDATE",[$invoice['id'],$school]);
+     $paid=(float)(one("SELECT COALESCE(SUM(amount),0) amt FROM fee_payments WHERE school_id=? AND invoice_id=?",[$school,$invoice['id']])['amt']??0);
      if($paid+$amount>(float)$invoice['amount']+0.001)throw new InvalidArgumentException('Payment exceeds balance');
      run("INSERT INTO fee_payments(school_id,invoice_id,amount,mode,reference,received_by) VALUES (?,?,?,?,?,?)",
       [$school,$invoice['id'],$amount,$mode,trim((string)($_POST['reference']??'')),$actor]);db()->commit();
