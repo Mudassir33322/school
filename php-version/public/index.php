@@ -87,7 +87,10 @@ function selection_data(int $school, array $user): array{
   $data['subjects']=many("SELECT DISTINCT sub.id,sub.name FROM subjects sub JOIN teacher_allocations a ON a.subject_id=sub.id AND a.school_id=sub.school_id WHERE a.school_id=? AND a.teacher_user_id=? ORDER BY sub.name",[$school,$id]);
   $data['students']=many("SELECT DISTINCT u.id,CONCAT(u.full_name,' (',sp.admission_no,')') name FROM student_profiles sp JOIN users u ON u.id=sp.user_id AND u.school_id=sp.school_id JOIN teacher_allocations a ON a.school_id=sp.school_id AND a.section_id=sp.section_id AND a.branch_id=sp.branch_id WHERE sp.school_id=? AND a.teacher_user_id=? AND u.status='active' ORDER BY name",[$school,$id]);
  } elseif($all||$finance){
-  $data['students']=many("SELECT users.id,CONCAT(users.full_name,' (',student_profiles.admission_no,')') name FROM student_profiles JOIN users ON users.id=student_profiles.user_id AND users.school_id=student_profiles.school_id WHERE student_profiles.school_id=? AND users.status='active' ORDER BY users.full_name",[$school]);
+  $sql="SELECT users.id,CONCAT(users.full_name,' (',student_profiles.admission_no,')') name FROM student_profiles JOIN users ON users.id=student_profiles.user_id AND users.school_id=student_profiles.school_id WHERE student_profiles.school_id=? AND users.status='active'";
+  $params=[$school];
+  if($finance&&!$all){$sql.=' AND student_profiles.branch_id=?';$params[]=(int)$user['branch_id'];}
+  $data['students']=many($sql.' ORDER BY users.full_name',$params);
  }
  return $data;
 }
@@ -223,6 +226,7 @@ if($vendor){
   }
   $sql='SELECT fi.id,fi.invoice_no,u.full_name student,fi.description,fi.amount,fi.due_date,COALESCE(SUM(fp.amount),0) paid,fi.amount-COALESCE(SUM(fp.amount),0) balance FROM fee_invoices fi JOIN users u ON u.id=fi.student_user_id LEFT JOIN fee_payments fp ON fp.invoice_id=fi.id AND fp.school_id=fi.school_id WHERE fi.school_id=?';$args=[$school];
   if($isStudent||$isParent){[$cond,$a]=student_filter('fi.student_user_id',$studentIds);$sql.=' AND '.$cond;$args=array_merge($args,$a);}
+  if($role==='accountant'){$sql.=' AND fi.branch_id=?';$args[]=(int)$u['branch_id'];}
   $sql.=' GROUP BY fi.id,fi.invoice_no,u.full_name,fi.description,fi.amount,fi.due_date ORDER BY fi.id DESC LIMIT 200';
   $invoices=many($sql,$args);
   panel('Student Fee Ledger');rows_table($invoices,['id'=>'ID','invoice_no'=>'Invoice','student'=>'Student','description'=>'Description','amount'=>'Total','paid'=>'Paid','balance'=>'Balance','due_date'=>'Due']);end_panel();
