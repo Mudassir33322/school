@@ -65,12 +65,12 @@ check_month "$MONTH" 2500 1800 1800
 post --data-urlencode 'action=fee_month_generate' --data-urlencode '_back=finance' \
  --data-urlencode "branch_id=$BRANCH" --data-urlencode "class_id=$CLASS" \
  --data-urlencode "billing_month=$MONTH" --data-urlencode "due_date=$DUE"
-check_month "$MONTH" 2500
+check_month "$MONTH" 2500 1800 1800
 echo 'PASS: monthly generation is idempotent'
 
 post --data-urlencode 'action=fee_plan_save' --data-urlencode '_back=finance' \
  --data-urlencode "branch_id=$BRANCH" --data-urlencode "class_id=$CLASS" --data-urlencode 'monthly_tuition=2800'
-check_month "$MONTH" 2500
+check_month "$MONTH" 2500 1800 1800
 post --data-urlencode 'action=fee_month_generate' --data-urlencode '_back=finance' \
  --data-urlencode "branch_id=$BRANCH" --data-urlencode "class_id=$CLASS" \
  --data-urlencode "billing_month=$NEXT_MONTH" --data-urlencode "due_date=$NEXT_DUE"
@@ -83,7 +83,7 @@ deny403 --data-urlencode 'action=fee_plan_save' --data-urlencode '_back=finance'
 post --data-urlencode 'action=fee_month_generate' --data-urlencode '_back=finance' \
  --data-urlencode "branch_id=$BRANCH" --data-urlencode "class_id=$CLASS" \
  --data-urlencode "billing_month=$MONTH" --data-urlencode "due_date=$DUE"
-check_month "$MONTH" 2500
+check_month "$MONTH" 2500 1800 1800
 curl -fsS -b "$COOKIE" "$BASE_URL/?page=finance" > "$PAGE"
 grep -q 'Class Monthly Fee Plans' "$PAGE"
 grep -q 'Monthly Invoice Line Items' "$PAGE"
