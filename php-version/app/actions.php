@@ -90,11 +90,11 @@ function handle_action(): never {
    run("UPDATE schools SET status=? WHERE id=?",[$status,$school]);audit(null,null,'status','school',$school);flash('School status updated.');redirect('company');
   }
   $u=require_school();$school=(int)$u['school_id'];$actor=(int)$u['id'];$branch=(int)($u['branch_id']??0);
-  if(in_array($action,['admission_apply','admission_review','admission_enroll','student_move','library_loan','library_return','transport_assign','transport_release','inventory_move','branch','academic_session','session_activate','class','section','subject','person','student_enrollment','allocation','timetable','notice','library_book','transport_route','inventory_item','certificate','fee_plan_save','fee_month_generate','fee_invoice','fee_adjustment','fee_refund','payroll','payroll_approve','payroll_pay'],true)){
+  if(in_array($action,['admission_apply','admission_review','admission_enroll','student_move','library_loan','library_return','transport_assign','transport_release','inventory_move','branch','academic_session','session_activate','class','section','subject','person','student_enrollment','allocation','timetable','notice','library_book','transport_route','inventory_item','certificate','fee_plan_save','fee_month_generate','fee_invoice','fee_adjustment','fee_refund','fee_installments_create','payroll','payroll_approve','payroll_pay'],true)){
    require_roles(['admin','principal','accountant']);
    $academic=['admission_apply','admission_review','admission_enroll','student_move','library_loan','library_return','transport_assign','transport_release','inventory_move','branch','academic_session','class','section','subject','person','student_enrollment','allocation','timetable','notice','library_book','transport_route','inventory_item','certificate'];
    if(in_array($action,$academic,true)&&$u['role']==='accountant')throw new InvalidArgumentException('Accountant access restricted');
-   $finance=['fee_plan_save','fee_month_generate','fee_invoice','fee_adjustment','fee_refund','payroll','payroll_pay'];
+   $finance=['fee_plan_save','fee_month_generate','fee_invoice','fee_adjustment','fee_refund','fee_installments_create','payroll','payroll_pay'];
    if(in_array($action,$finance,true))require_roles(['admin','accountant']);
   }
   switch($action){
@@ -483,6 +483,41 @@ function handle_action(): never {
      run("INSERT INTO fee_payments(school_id,invoice_id,amount,mode,reference,received_by) VALUES (?,?,?,?,?,?)",
       [$school,$invoice['id'],$amount,$mode,trim((string)($_POST['reference']??'')),$actor]);db()->commit();
     }catch(Throwable $e){db()->rollBack();throw $e;}break;
+   case 'fee_installments_create':
+    require_roles(['admin','accountant']);
+    $invoiceId=positive_id('invoice_id');
+    $count=positive_id('installment_count');
+    if($count<2 || $count>12)throw new InvalidArgumentException('Choose between 2 and 12 installments');
+    $start=date_input('first_due_date');
+    $startDate=new DateTimeImmutable($start);
+    $anchorDay=(int)$startDate->format('d');
+    $baseMonth=new DateTimeImmutable($startDate->format('Y-m-01'));
+    db()->beginTransaction();
+    try{
+     // Prevent concurrent plans and serialize with refunds, concessions and fee payments.
+     $invoice=one("SELECT * FROM fee_invoices WHERE school_id=? AND id=? FOR UPDATE",[$school,$invoiceId]);
+     if(!$invoice || ($u['role']==='accountant' && (int)$u['branch_id']!==(int)$invoice['branch_id']))
+       throw new InvalidArgumentException('Invoice not accessible to your campus');
+     if(one("SELECT id FROM fee_installment_plans WHERE school_id=? AND invoice_id=?",[$school,$invoiceId]))
+       throw new InvalidArgumentException('This invoice already has an installment schedule');
+     $cents=(int)round((float)$invoice['amount']*100);
+     if($cents<$count)throw new InvalidArgumentException('Invoice amount too small for that many installments');
+     $each=intdiv($cents,$count);
+     run("INSERT INTO fee_installment_plans(school_id,invoice_id,installment_count,created_by) VALUES (?,?,?,?)",
+       [$school,$invoiceId,$count,$actor]);
+     $planId=(int)db()->lastInsertId();
+     for($i=0;$i<$count;$i++){
+      // Anchor every due date to original day; clamp 29th–31st for short months.
+      $month=$baseMonth->modify('+'.$i.' month');
+      $last=(int)$month->format('t');
+      $due=$month->setDate((int)$month->format('Y'),(int)$month->format('m'),min($anchorDay,$last))->format('Y-m-d');
+      $partCents=$i===$count-1 ? $cents-$each*($count-1) : $each;
+      run("INSERT INTO fee_installments(school_id,plan_id,sequence_no,due_date,amount) VALUES (?,?,?,?,?)",
+       [$school,$planId,$i+1,$due,number_format($partCents/100,2,'.','')]);
+     }
+     db()->commit();
+    }catch(Throwable $e){db()->rollBack();throw $e;}
+    break;
    case 'fee_refund':
     require_roles(['admin','accountant']);
     $paymentId=positive_id('payment_id');$amount=money_input('amount');
