@@ -79,3 +79,15 @@ jobs:
           curl -fsS 'http://127.0.0.1:8080/assets/style.css' -o /dev/null
           test -s /tmp/campusos-login.html
           bash bin/smoke-http.sh
+
+      - name: Package clean Phase 1 preview ZIP
+        if: success()
+        working-directory: .
+        run: git archive --format=zip --output=campusos-php-phase1-preview.zip HEAD:php-version
+      - name: Upload Phase 1 preview ZIP
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: campusos-php-phase1-preview
+          path: campusos-php-phase1-preview.zip
+          retention-days: 14
