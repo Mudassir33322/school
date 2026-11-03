@@ -1,0 +1,8 @@
+Options -Indexes
+<FilesMatch "^(config\.php|config\.example\.php|README\.md|MASTER_BLUEPRINT\.md|RELEASE_READINESS\.md)$">
+Require all denied
+</FilesMatch>
+<IfModule mod_rewrite.c>
+RewriteEngine On
+RewriteRule ^(?:app|database|bin)(?:/|$) - [F,L,NC]
+</IfModule>
