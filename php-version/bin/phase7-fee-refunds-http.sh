@@ -92,7 +92,7 @@ echo 'PASS: cumulative full refund and duplicate over-refund rejected'
 curl -fsS -b "$COOKIE" "$BASE_URL/?page=finance" > "$PAGE"
 grep -q 'Refund Audit History' "$PAGE"
 grep -q 'Net Paid' "$PAGE"
-grep -q 'Fee Payment History & Receipts' "$PAGE"
+grep -q 'Fee Payment History &amp; Receipts' "$PAGE"
 curl -fsS -b "$COOKIE" "$BASE_URL/?page=finance&receipt=$PAYMENT" > "$PAGE"
 grep -q 'Fee Payment Receipt' "$PAGE"
 grep -q 'Net retained against this payment' "$PAGE"
