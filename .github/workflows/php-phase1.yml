@@ -80,14 +80,18 @@ jobs:
           test -s /tmp/campusos-login.html
           bash bin/smoke-http.sh
 
-      - name: Package clean Phase 1 preview ZIP
+      - name: Prepare clean Phase 1 source package
         if: success()
         working-directory: .
-        run: git archive --format=zip --output=campusos-php-phase1-preview.zip HEAD:php-version
+        run: |
+          mkdir -p phase1-package
+          git archive --format=tar HEAD:php-version | tar -xf - -C phase1-package
+          test -f phase1-package/public/index.php
+          test ! -f phase1-package/config.php
       - name: Upload Phase 1 preview ZIP
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: campusos-php-phase1-preview
-          path: campusos-php-phase1-preview.zip
+          path: phase1-package/
           retention-days: 14
