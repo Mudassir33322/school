@@ -19,9 +19,9 @@ $isParent=$role==='parent';
 $studentIds=$u?user_children($u):[];
 $allowedPages=['dashboard'=>true,'notices'=>true,'leave'=>true];
 if($isAdmin)$allowedPages+=array_fill_keys(['setup','people','academics','timetable','attendance','homework','exams','resources','reports','documents'],true);
-if($isFinance)$allowedPages+=array_fill_keys(['finance','people','reports'],true);
+if($isFinance)$allowedPages+=array_fill_keys(['finance','reports'],true);
 if($isTeacher)$allowedPages+=array_fill_keys(['timetable','attendance','homework','exams','academics','reports'],true);
-if($isStudent||$isParent)$allowedPages+=array_fill_keys(['timetable','attendance','homework','exams','finance','reports','documents'],true);
+if($isStudent||$isParent)$allowedPages+=array_fill_keys(['timetable','attendance','homework','exams','finance','documents'],true);
 if($u&&!isset($allowedPages[$page])) {http_response_code(403);exit('Access denied');}
 function field(string $label,string $name,string $type='text',string $value='',bool $required=true): void {
  echo '<div class="field"><label for="'.h($name).'">'.h($label).'</label><input id="'.h($name).'" name="'.h($name).'" type="'.h($type).'" value="'.h($value).'"'.($required?' required':'').'></div>';
@@ -100,7 +100,7 @@ $navIcons=['dashboard'=>'◈','setup'=>'⚙','people'=>'♙','academics'=>'▦',
 <?php
 if($vendor){
  $schools=many('SELECT s.id,s.name,s.code,s.delivery_model,s.status,s.created_at,COUNT(b.id) branches FROM schools s LEFT JOIN branches b ON b.school_id=s.id GROUP BY s.id,s.name,s.code,s.delivery_model,s.status,s.created_at ORDER BY s.id DESC');
- echo '<div class="grid">';stat('Registered Schools',(string)count($schools),'▣');stat('Active Schools',(string)count(array_filter($schools,fn($x)=>$x['status']==='active')),'✓');end_panel();echo '</div>';
+ echo '<div class="grid">';stat('Registered Schools',(string)count($schools),'▣');stat('Active Schools',(string)count(array_filter($schools,fn($x)=>$x['status']==='active')),'✓');echo '</div>';
  panel('Register New School');form_start('company_school','company');field('School Name','name');field('Unique School Code','code');field('Admin Email','email','email');field('Temporary Admin Password (12+ chars)','password','password');pick('Delivery Model','delivery_model',['saas'=>'SaaS subscription','direct'=>'One-time license']);form_end('Create School');end_panel();
  panel('School Accounts');rows_table($schools,['id'=>'ID','name'=>'School','code'=>'Code','delivery_model'=>'Delivery','status'=>'Status','branches'=>'Branches','created_at'=>'Created']);end_panel();
  panel('Change School Status');form_start('company_status','company');pick('School','school_id',opts($schools));pick('Status','status',['active'=>'Active','suspended'=>'Suspended']);form_end('Update');end_panel();
