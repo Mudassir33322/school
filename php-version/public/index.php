@@ -3,7 +3,7 @@ declare(strict_types=1);
 require dirname(__DIR__) . '/app/actions.php';
 if ($_SERVER['REQUEST_METHOD']==='POST') handle_action();
 $page=(string)($_GET['page']??'dashboard');
-$allowed=['login','company','dashboard','setup','people','academics','timetable','attendance','homework','exams','finance','notices','resources','reports','documents','leave'];
+$allowed=['login','company','dashboard','admissions','setup','people','academics','timetable','attendance','homework','exams','finance','notices','resources','reports','documents','leave'];
 if(!in_array($page,$allowed,true)) {http_response_code(404);exit('Page not found');}
 $vendor=null;$u=null;
 if($page==='company')$vendor=require_company();
@@ -18,7 +18,7 @@ $isStudent=$role==='student';
 $isParent=$role==='parent';
 $studentIds=$u?user_children($u):[];
 $allowedPages=['dashboard'=>true,'notices'=>true,'leave'=>true];
-if($isAdmin)$allowedPages+=array_fill_keys(['setup','people','academics','timetable','attendance','homework','exams','resources','reports','documents'],true);
+if($isAdmin)$allowedPages+=array_fill_keys(['admissions','setup','people','academics','timetable','attendance','homework','exams','resources','reports','documents'],true);
 if($isFinance)$allowedPages+=array_fill_keys(['finance','reports'],true);
 if($isTeacher)$allowedPages+=array_fill_keys(['timetable','attendance','homework','exams','academics','reports'],true);
 if($isStudent||$isParent)$allowedPages+=array_fill_keys(['timetable','attendance','homework','exams','finance','documents'],true);
@@ -105,9 +105,9 @@ if($page==='login'):
 <?php field('Email','email','email');field('Password','password','password');form_end('Sign in'); ?>
 <div class="auth-links"><a href="<?=h(url('login',['portal'=>$portal==='company'?'school':'company']))?>">Switch to <?= $portal==='company'?'school':'company' ?> login</a></div></div></section></div><script src="/assets/app.js"></script></body></html>
 <?php exit;endif;
-$titleMap=['company'=>'Company Control','dashboard'=>'Dashboard','setup'=>'School Setup','people'=>'People & Enrollment','academics'=>'Academics','timetable'=>'Timetable','attendance'=>'Attendance','homework'=>'Homework','exams'=>'Examinations','finance'=>'Fees & Finance','notices'=>'Notices','resources'=>'Resources & Operations','reports'=>'Reports','documents'=>'Documents & Cards','leave'=>'Leave Requests'];
+$titleMap=['company'=>'Company Control','dashboard'=>'Dashboard','admissions'=>'Admissions','setup'=>'School Setup','people'=>'People & Enrollment','academics'=>'Academics','timetable'=>'Timetable','attendance'=>'Attendance','homework'=>'Homework','exams'=>'Examinations','finance'=>'Fees & Finance','notices'=>'Notices','resources'=>'Resources & Operations','reports'=>'Reports','documents'=>'Documents & Cards','leave'=>'Leave Requests'];
 $title=$titleMap[$page]??'Dashboard';
-$navIcons=['dashboard'=>'◈','setup'=>'⚙','people'=>'♙','academics'=>'▦','timetable'=>'◷','attendance'=>'✓','homework'=>'✎','exams'=>'▤','finance'=>'₨','notices'=>'◇','resources'=>'▣','reports'=>'▥','documents'=>'▤','leave'=>'◫'];
+$navIcons=['dashboard'=>'◈','admissions'=>'▤','setup'=>'⚙','people'=>'♙','academics'=>'▦','timetable'=>'◷','attendance'=>'✓','homework'=>'✎','exams'=>'▤','finance'=>'₨','notices'=>'◇','resources'=>'▣','reports'=>'▥','documents'=>'▤','leave'=>'◫'];
 ?><!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title><?=h($title)?> | CampusOS</title><link rel="stylesheet" href="/assets/style.css"></head><body>
 <div class="layout"><aside class="sidebar"><div class="brand"><span class="brand-icon">C</span><span>CampusOS</span></div><nav><div class="nav-label">Workspace</div>
 <?php if($vendor):?><a href="<?=h(url('company'))?>" aria-current="page"><span class="nav-icon">◈</span>Company Control</a>
@@ -136,6 +136,25 @@ if($vendor){
   $aud=$isStudent?'students':($isParent?'parents':($isTeacher?'teachers':'all'));
   rows_table(many("SELECT title,body,created_at FROM notices WHERE school_id=? AND audience IN ('all',?) ORDER BY id DESC LIMIT 8",[$school,$aud]),['title'=>'Title','body'=>'Message','created_at'=>'Published']);end_panel();
   panel('Getting started');echo '<p class="muted">Recommended flow: configure academic year and class sections, create parent and student accounts, enroll students, assign teachers, publish timetable, take attendance, issue homework, record results and generate invoices.</p>';end_panel();
+ }
+ if($page==='admissions'){
+   panel('New Admission Application');
+   form_start('admission_apply','admissions');
+   pick('Branch','branch_id',$branches);pick('Requested Class','class_id',$classes);pick('Requested Section','section_id',$sections);
+   field('Applicant Name','applicant_name');field('Applicant Email','applicant_email','email');
+   field('Guardian Name','guardian_name');field('Guardian Email','guardian_email','email');field('Guardian Phone','guardian_phone','tel');
+   form_end('Register Application');end_panel();
+   $apps=many("SELECT a.id,a.applicant_name,a.applicant_email,a.guardian_name,a.guardian_phone,a.status,a.admission_number,c.name class_name,s.name section_name,a.created_at FROM admission_applications a JOIN classes c ON c.id=a.class_id JOIN sections s ON s.id=a.section_id WHERE a.school_id=? ORDER BY a.id DESC LIMIT 150",[$school]);
+   panel('Admission Applications');rows_table($apps,['id'=>'ID','applicant_name'=>'Applicant','applicant_email'=>'Email','guardian_name'=>'Guardian','guardian_phone'=>'Contact','class_name'=>'Class','section_name'=>'Section','status'=>'Status','admission_number'=>'Admission #','created_at'=>'Submitted']);end_panel();
+   $pending=array_values(array_filter($apps,fn($x)=>$x['status']==='pending'));
+   panel('Review Pending Application');form_start('admission_review','admissions');pick('Application','application_id',opts($pending,'id','applicant_name'));pick('Review Decision','decision',['approved'=>'Approve','rejected'=>'Reject']);form_end('Save Review');end_panel();
+   $approved=array_values(array_filter($apps,fn($x)=>$x['status']==='approved'));
+   panel('Enroll Approved Applicant');
+   echo '<p class="muted small">This atomically creates the student profile, creates or links the guardian and reserves a section seat. For an existing guardian email, the existing guardian account is linked.</p>';
+   form_start('admission_enroll','admissions');pick('Approved Application','application_id',opts($approved,'id','applicant_name'));field('Admission Number','admission_no');
+   field('Student Initial Password (12+ chars)','student_password','password');
+   field('Guardian Initial Password (new guardians only, 12+ chars)','guardian_password','password');
+   form_end('Create Student & Enroll');end_panel();
  }
  if($page==='setup'){
   panel('Create Branch');form_start('branch','setup');field('Branch Name','name');field('Code','code');field('City','city','text','',false);form_end();end_panel();
