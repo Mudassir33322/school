@@ -401,8 +401,15 @@ function handle_action(): never {
      // Serializes identical class/month batches, including simultaneous requests.
      $plan=one("SELECT * FROM fee_plans WHERE school_id=? AND branch_id=? AND class_id=? FOR UPDATE",[$school,$b,$c]);
      if(!$plan)throw new InvalidArgumentException('Create a class fee plan before generating bills');
-     $pupils=many("SELECT sp.user_id,u.full_name FROM student_profiles sp JOIN users u ON u.id=sp.user_id AND u.school_id=sp.school_id AND u.status='active' LEFT JOIN fee_invoices fi ON fi.school_id=sp.school_id AND fi.student_user_id=sp.user_id AND fi.billing_month=? WHERE sp.school_id=? AND sp.branch_id=? AND sp.class_id=? AND fi.id IS NULL ORDER BY sp.user_id LIMIT 200",
-      [$month,$school,$b,$c]);
+     $pupilSql="SELECT sp.user_id,u.full_name FROM student_profiles sp JOIN users u ON u.id=sp.user_id AND u.school_id=sp.school_id AND u.status='active' LEFT JOIN fee_invoices fi ON fi.school_id=sp.school_id AND fi.student_user_id=sp.user_id AND fi.billing_month=? WHERE sp.school_id=? AND sp.branch_id=? AND sp.class_id=? AND fi.id IS NULL";
+     $pupilArgs=[$month,$school,$b,$c];
+     // When tuition is zero, skip truly free students in the SQL query rather than
+     // consuming a fixed batch window and blocking paying transport students later.
+     if((float)$plan['monthly_tuition']===0.0){
+      $pupilSql.=" AND EXISTS (SELECT 1 FROM transport_assignments ta JOIN transport_routes tr ON tr.id=ta.route_id AND tr.school_id=ta.school_id WHERE ta.school_id=sp.school_id AND ta.branch_id=sp.branch_id AND ta.student_user_id=sp.user_id AND tr.monthly_fee>0 AND ta.assigned_on<=? AND (ta.released_at IS NULL OR DATE(ta.released_at)>=?))";
+      array_push($pupilArgs,$lastDay,$firstDay);
+     }
+     $pupils=many($pupilSql.' ORDER BY sp.user_id LIMIT 200',$pupilArgs);
      foreach($pupils as $pupil){
       $studentId=(int)$pupil['user_id'];
       // Exactly one transport charge per student/month, based on the most recently assigned
@@ -433,7 +440,7 @@ function handle_action(): never {
     break;
    case 'fee_invoice':
     $student=positive_id('student_user_id');$p=verify_student($school,$student);
-    if(!allowed_branch($u,(int)$p['branch_id']))throw new InvalidArgumentException('Student belongs to another branch');
+    if($u['role']==='accountant' && (int)$u['branch_id']!==(int)$p['branch_id'])throw new InvalidArgumentException('Student belongs to another branch');
     $amount=money_input('amount');if($amount<=0)throw new InvalidArgumentException('Amount must exceed zero');
     run("INSERT INTO fee_invoices(school_id,branch_id,student_user_id,invoice_no,description,amount,due_date) VALUES (?,?,?,?,?,?,?)",
      [$school,$p['branch_id'],$student,required_text('invoice_no',64),required_text('description'),$amount,date_input('due_date')]);break;
@@ -448,7 +455,7 @@ function handle_action(): never {
     db()->beginTransaction();
     try {
      $invoice=one("SELECT * FROM fee_invoices WHERE id=? AND school_id=? FOR UPDATE",[$invoiceId,$school]);
-     if(!$invoice||!allowed_branch($u,(int)$invoice['branch_id']))throw new InvalidArgumentException('Invoice not found for your branch');
+     if(!$invoice||($u['role']==='accountant' && (int)$u['branch_id']!==(int)$invoice['branch_id']))throw new InvalidArgumentException('Invoice not found for your branch');
      $adjusted=(float)(one("SELECT COALESCE(SUM(amount),0) amt FROM fee_adjustments WHERE school_id=? AND invoice_id=?",[$school,$invoiceId])['amt']??0);
      $paid=(float)(one("SELECT COALESCE(SUM(amount),0) amt FROM fee_payments WHERE school_id=? AND invoice_id=?",[$school,$invoiceId])['amt']??0);
      if($amount+$paid+$adjusted>(float)$invoice['amount']+0.0001)throw new InvalidArgumentException('Discount would exceed unpaid invoice balance');
@@ -459,7 +466,7 @@ function handle_action(): never {
    case 'fee_payment':
     require_roles(['admin','accountant']);
     $invoice=assert_school_row('fee_invoices',positive_id('invoice_id'),$school);
-    if(!allowed_branch($u,(int)$invoice['branch_id']))throw new InvalidArgumentException('Invoice belongs to another branch');
+    if($u['role']==='accountant' && (int)$u['branch_id']!==(int)$invoice['branch_id'])throw new InvalidArgumentException('Invoice belongs to another branch');
     $amount=money_input('amount');$mode=(string)($_POST['mode']??'cash');
     if(!in_array($mode,['cash','bank','cheque','online_manual'],true)||$amount<=0)throw new InvalidArgumentException('Invalid payment');
     db()->beginTransaction();
