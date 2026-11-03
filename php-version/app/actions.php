@@ -90,9 +90,9 @@ function handle_action(): never {
    run("UPDATE schools SET status=? WHERE id=?",[$status,$school]);audit(null,null,'status','school',$school);flash('School status updated.');redirect('company');
   }
   $u=require_school();$school=(int)$u['school_id'];$actor=(int)$u['id'];$branch=(int)($u['branch_id']??0);
-  if(in_array($action,['admission_apply','admission_review','admission_enroll','branch','academic_session','session_activate','class','section','subject','person','student_enrollment','allocation','timetable','notice','library_book','transport_route','inventory_item','certificate','fee_invoice','fee_adjustment','payroll'],true)){
+  if(in_array($action,['admission_apply','admission_review','admission_enroll','student_move','library_loan','library_return','branch','academic_session','session_activate','class','section','subject','person','student_enrollment','allocation','timetable','notice','library_book','transport_route','inventory_item','certificate','fee_invoice','fee_adjustment','payroll'],true)){
    require_roles(['admin','principal','accountant']);
-   $academic=['admission_apply','admission_review','admission_enroll','branch','academic_session','class','section','subject','person','student_enrollment','allocation','timetable','notice','library_book','transport_route','inventory_item','certificate'];
+   $academic=['admission_apply','admission_review','admission_enroll','student_move','library_loan','library_return','branch','academic_session','class','section','subject','person','student_enrollment','allocation','timetable','notice','library_book','transport_route','inventory_item','certificate'];
    if(in_array($action,$academic,true)&&$u['role']==='accountant')throw new InvalidArgumentException('Accountant access restricted');
    $finance=['fee_invoice','fee_adjustment','payroll'];
    if(in_array($action,$finance,true)&&!in_array($u['role'],['admin','accountant'],true))throw new InvalidArgumentException('Finance access restricted');
@@ -194,6 +194,82 @@ function handle_action(): never {
      $count=(int)(one('SELECT COUNT(*) n FROM student_profiles WHERE school_id=? AND section_id=?',[$school,$s])['n']??0);
      if($count >= (int)$section['capacity'])throw new InvalidArgumentException('Section is full');
      run("INSERT INTO student_profiles(school_id,branch_id,user_id,parent_user_id,class_id,section_id,admission_no,roll_no) VALUES (?,?,?,?,?,?,?,?)",[$school,$b,$id,$parent,$c,$s,required_text('admission_no',64),trim((string)($_POST['roll_no']??''))]);
+     db()->commit();
+    }catch(Throwable $e){db()->rollBack();throw $e;}
+    break;
+   case 'student_move':
+    $student=positive_id('student_user_id');
+    $toBranch=positive_id('to_branch_id');
+    $toClass=positive_id('to_class_id');
+    $toSection=positive_id('to_section_id');
+    $type=(string)($_POST['movement_type']??'');
+    $reason=required_text('reason',255);
+    if(!in_array($type,['promotion','section_change','transfer'],true))throw new InvalidArgumentException('Invalid student movement type');
+    assert_branch($toBranch,$school);
+    ownership('classes',$toClass,$school);
+    verify_section($school,$toSection,$toClass,$toBranch);
+    db()->beginTransaction();
+    try {
+     $session=one("SELECT id FROM school_sessions WHERE school_id=? AND is_current=1 LIMIT 1",[$school]);
+     if(!$session)throw new InvalidArgumentException('Activate an academic session before moving students');
+     $profile=one("SELECT * FROM student_profiles WHERE user_id=? AND school_id=? FOR UPDATE",[$student,$school]);
+     if(!$profile)throw new InvalidArgumentException('Student enrollment not found');
+     $fromBranch=(int)$profile['branch_id'];$fromClass=(int)$profile['class_id'];$fromSection=(int)$profile['section_id'];
+     if($fromBranch===$toBranch && $fromClass===$toClass && $fromSection===$toSection)throw new InvalidArgumentException('Student is already in that section');
+     if($u['role']==='principal' && ((int)$u['branch_id']!==$fromBranch || (int)$u['branch_id']!==$toBranch))throw new InvalidArgumentException('Principal cannot move students between campuses');
+     if($type==='promotion' && ($toClass===$fromClass || $toBranch!==$fromBranch))throw new InvalidArgumentException('Promotion must change class within the current branch');
+     if($type==='section_change' && ($toClass!==$fromClass || $toBranch!==$fromBranch))throw new InvalidArgumentException('Section change must stay in the same class and campus');
+     if($type==='transfer' && $toBranch===$fromBranch)throw new InvalidArgumentException('Transfer must target a different campus');
+     if($toBranch!==$fromBranch){
+      $activeLoans=(int)(one("SELECT COUNT(*) n FROM library_loans WHERE school_id=? AND borrower_user_id=? AND returned_at IS NULL",[$school,$student])['n']??0);
+      if($activeLoans>0)throw new InvalidArgumentException('Return active library loans before transferring campus');
+     }
+     // Lock destination section; all enrollments and student moves acquire this row before capacity check.
+     $destination=one("SELECT id,capacity FROM sections WHERE id=? AND school_id=? AND branch_id=? AND class_id=? FOR UPDATE",[$toSection,$school,$toBranch,$toClass]);
+     if(!$destination)throw new InvalidArgumentException('Destination section no longer exists');
+     $occupied=(int)(one("SELECT COUNT(*) n FROM student_profiles WHERE school_id=? AND section_id=?",[$school,$toSection])['n']??0);
+     if($occupied >= (int)$destination['capacity'])throw new InvalidArgumentException('Destination section is full');
+     run("UPDATE student_profiles SET branch_id=?,class_id=?,section_id=? WHERE school_id=? AND user_id=?",[$toBranch,$toClass,$toSection,$school,$student]);
+     run("UPDATE users SET branch_id=? WHERE school_id=? AND id=? AND role='student'",[$toBranch,$school,$student]);
+     run("INSERT INTO student_movements(school_id,student_user_id,from_branch_id,to_branch_id,from_class_id,to_class_id,from_section_id,to_section_id,academic_session_id,movement_type,reason,performed_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+      [$school,$student,$fromBranch,$toBranch,$fromClass,$toClass,$fromSection,$toSection,(int)$session['id'],$type,$reason,$actor]);
+     db()->commit();
+    }catch(Throwable $e){db()->rollBack();throw $e;}
+    break;
+   case 'library_loan':
+    $bookId=positive_id('book_id');$borrowerId=positive_id('borrower_user_id');
+    $due=date_input('due_date');$today=date('Y-m-d');
+    if($due<$today)throw new InvalidArgumentException('Due date cannot be in the past');
+    db()->beginTransaction();
+    try {
+     // Lock book to prevent two concurrent requests oversubscribing available copies.
+     $book=one("SELECT * FROM library_books WHERE id=? AND school_id=? FOR UPDATE",[$bookId,$school]);
+     if(!$book)throw new InvalidArgumentException('Book not found');
+     if($u['role']==='principal' && (int)$u['branch_id']!==(int)$book['branch_id'])throw new InvalidArgumentException('Book belongs to another campus');
+     $borrower=school_user($borrowerId,$school);
+     if(!in_array($borrower['role'],['student','teacher','staff','principal'],true))throw new InvalidArgumentException('Only students and staff can borrow books');
+     if((int)$borrower['branch_id']!==(int)$book['branch_id'])throw new InvalidArgumentException('Borrower must belong to book campus');
+     if($borrower['role']==='student'){
+      $sp=verify_student($school,$borrowerId);
+      if((int)$sp['branch_id']!==(int)$book['branch_id'])throw new InvalidArgumentException('Student has transferred campus');
+     }
+     $taken=(int)(one("SELECT COUNT(*) n FROM library_loans WHERE school_id=? AND book_id=? AND returned_at IS NULL",[$school,$bookId])['n']??0);
+     if($taken >= (int)$book['copies'])throw new InvalidArgumentException('No copies currently available');
+     $duplicate=one("SELECT id FROM library_loans WHERE school_id=? AND book_id=? AND borrower_user_id=? AND returned_at IS NULL",[$school,$bookId,$borrowerId]);
+     if($duplicate)throw new InvalidArgumentException('Borrower already has this book');
+     run("INSERT INTO library_loans(school_id,branch_id,book_id,borrower_user_id,issue_date,due_date,issued_by) VALUES (?,?,?,?,?,?,?)",[$school,$book['branch_id'],$bookId,$borrowerId,$today,$due,$actor]);
+     db()->commit();
+    }catch(Throwable $e){db()->rollBack();throw $e;}
+    break;
+   case 'library_return':
+    $loanId=positive_id('loan_id');
+    db()->beginTransaction();
+    try {
+     $loan=one("SELECT * FROM library_loans WHERE id=? AND school_id=? FOR UPDATE",[$loanId,$school]);
+     if(!$loan)throw new InvalidArgumentException('Loan not found');
+     if($u['role']==='principal' && (int)$u['branch_id']!==(int)$loan['branch_id'])throw new InvalidArgumentException('Loan belongs to another campus');
+     if($loan['returned_at']!==null)throw new InvalidArgumentException('Book already returned');
+     run("UPDATE library_loans SET returned_at=NOW(),returned_by=? WHERE id=? AND school_id=? AND returned_at IS NULL",[$actor,$loanId,$school]);
      db()->commit();
     }catch(Throwable $e){db()->rollBack();throw $e;}
     break;
