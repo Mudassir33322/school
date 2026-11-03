@@ -90,11 +90,11 @@ function handle_action(): never {
    run("UPDATE schools SET status=? WHERE id=?",[$status,$school]);audit(null,null,'status','school',$school);flash('School status updated.');redirect('company');
   }
   $u=require_school();$school=(int)$u['school_id'];$actor=(int)$u['id'];$branch=(int)($u['branch_id']??0);
-  if(in_array($action,['admission_apply','admission_review','admission_enroll','student_move','library_loan','library_return','transport_assign','transport_release','inventory_move','branch','academic_session','session_activate','class','section','subject','person','student_enrollment','allocation','timetable','notice','library_book','transport_route','inventory_item','certificate','fee_plan_save','fee_month_generate','fee_invoice','fee_adjustment','payroll','payroll_approve','payroll_pay'],true)){
+  if(in_array($action,['admission_apply','admission_review','admission_enroll','student_move','library_loan','library_return','transport_assign','transport_release','inventory_move','branch','academic_session','session_activate','class','section','subject','person','student_enrollment','allocation','timetable','notice','library_book','transport_route','inventory_item','certificate','fee_plan_save','fee_month_generate','fee_invoice','fee_adjustment','fee_refund','payroll','payroll_approve','payroll_pay'],true)){
    require_roles(['admin','principal','accountant']);
    $academic=['admission_apply','admission_review','admission_enroll','student_move','library_loan','library_return','transport_assign','transport_release','inventory_move','branch','academic_session','class','section','subject','person','student_enrollment','allocation','timetable','notice','library_book','transport_route','inventory_item','certificate'];
    if(in_array($action,$academic,true)&&$u['role']==='accountant')throw new InvalidArgumentException('Accountant access restricted');
-   $finance=['fee_plan_save','fee_month_generate','fee_invoice','fee_adjustment','payroll','payroll_pay'];
+   $finance=['fee_plan_save','fee_month_generate','fee_invoice','fee_adjustment','fee_refund','payroll','payroll_pay'];
    if(in_array($action,$finance,true))require_roles(['admin','accountant']);
   }
   switch($action){
@@ -457,7 +457,9 @@ function handle_action(): never {
      $invoice=one("SELECT * FROM fee_invoices WHERE id=? AND school_id=? FOR UPDATE",[$invoiceId,$school]);
      if(!$invoice||($u['role']==='accountant' && (int)$u['branch_id']!==(int)$invoice['branch_id']))throw new InvalidArgumentException('Invoice not found for your branch');
      $adjusted=(float)(one("SELECT COALESCE(SUM(amount),0) amt FROM fee_adjustments WHERE school_id=? AND invoice_id=?",[$school,$invoiceId])['amt']??0);
-     $paid=(float)(one("SELECT COALESCE(SUM(amount),0) amt FROM fee_payments WHERE school_id=? AND invoice_id=?",[$school,$invoiceId])['amt']??0);
+     $grossPaid=(float)(one("SELECT COALESCE(SUM(amount),0) amt FROM fee_payments WHERE school_id=? AND invoice_id=?",[$school,$invoiceId])['amt']??0);
+     $refunded=(float)(one("SELECT COALESCE(SUM(amount),0) amt FROM fee_refunds WHERE school_id=? AND invoice_id=?",[$school,$invoiceId])['amt']??0);
+     $paid=$grossPaid-$refunded;
      if($amount+$paid+$adjusted>(float)$invoice['amount']+0.0001)throw new InvalidArgumentException('Discount would exceed unpaid invoice balance');
      run("INSERT INTO fee_adjustments(school_id,invoice_id,adjustment_type,amount,reason,approved_by) VALUES (?,?,?,?,?,?)",[$school,$invoiceId,$type,$amount,$reason,$actor]);
      db()->commit();
@@ -473,12 +475,40 @@ function handle_action(): never {
     try{
      // Lock parent invoice row, not an aggregate result, to serialize concurrent payments.
      one("SELECT id FROM fee_invoices WHERE id=? AND school_id=? FOR UPDATE",[$invoice['id'],$school]);
-     $paid=(float)(one("SELECT COALESCE(SUM(amount),0) amt FROM fee_payments WHERE school_id=? AND invoice_id=?",[$school,$invoice['id']])['amt']??0);
+     $grossPaid=(float)(one("SELECT COALESCE(SUM(amount),0) amt FROM fee_payments WHERE school_id=? AND invoice_id=?",[$school,$invoice['id']])['amt']??0);
+     $refunded=(float)(one("SELECT COALESCE(SUM(amount),0) amt FROM fee_refunds WHERE school_id=? AND invoice_id=?",[$school,$invoice['id']])['amt']??0);
+     $paid=$grossPaid-$refunded;
      $adjusted=(float)(one("SELECT COALESCE(SUM(amount),0) amt FROM fee_adjustments WHERE school_id=? AND invoice_id=?",[$school,$invoice['id']])['amt']??0);
      if($paid+$adjusted+$amount>(float)$invoice['amount']+0.0001)throw new InvalidArgumentException('Payment exceeds discounted balance');
      run("INSERT INTO fee_payments(school_id,invoice_id,amount,mode,reference,received_by) VALUES (?,?,?,?,?,?)",
       [$school,$invoice['id'],$amount,$mode,trim((string)($_POST['reference']??'')),$actor]);db()->commit();
     }catch(Throwable $e){db()->rollBack();throw $e;}break;
+   case 'fee_refund':
+    require_roles(['admin','accountant']);
+    $paymentId=positive_id('payment_id');$amount=money_input('amount');
+    if($amount<=0)throw new InvalidArgumentException('Refund must be greater than zero');
+    $mode=(string)($_POST['mode']??'');
+    if(!in_array($mode,['cash','bank','cheque','online_manual'],true))throw new InvalidArgumentException('Invalid refund method');
+    $reason=required_text('reason',255);
+    $reference=trim((string)($_POST['reference']??''));
+    if(mb_strlen($reference)>100 || ($mode!=='cash' && $reference===''))throw new InvalidArgumentException('Non-cash refunds require a transaction reference');
+    db()->beginTransaction();
+    try{
+     $original=one("SELECT id,invoice_id FROM fee_payments WHERE id=? AND school_id=?",[$paymentId,$school]);
+     if(!$original)throw new InvalidArgumentException('Payment not found in this school');
+     // All payments/concessions/refunds acquire the invoice lock first.
+     $invoice=one("SELECT * FROM fee_invoices WHERE id=? AND school_id=? FOR UPDATE",[$original['invoice_id'],$school]);
+     if(!$invoice || ($u['role']==='accountant' && (int)$u['branch_id']!==(int)$invoice['branch_id']))
+      throw new InvalidArgumentException('Invoice belongs to another branch');
+     $payment=one("SELECT id,amount FROM fee_payments WHERE id=? AND school_id=? AND invoice_id=?",[$paymentId,$school,$invoice['id']]);
+     if(!$payment)throw new InvalidArgumentException('Payment does not match invoice');
+     $already=(float)(one("SELECT COALESCE(SUM(amount),0) amt FROM fee_refunds WHERE school_id=? AND payment_id=?",[$school,$paymentId])['amt']??0);
+     if($already+$amount>(float)$payment['amount']+0.0001)throw new InvalidArgumentException('Refund exceeds the remaining refundable payment amount');
+     run("INSERT INTO fee_refunds(school_id,invoice_id,payment_id,amount,mode,reference,reason,refunded_by) VALUES (?,?,?,?,?,?,?,?)",
+      [$school,$invoice['id'],$paymentId,$amount,$mode,$reference,$reason,$actor]);
+     db()->commit();
+    }catch(Throwable $e){db()->rollBack();throw $e;}
+    break;
    case 'notice':
     $audience=(string)($_POST['audience']??'all');
     if(!in_array($audience,['all','teachers','students','parents'],true))throw new InvalidArgumentException('Invalid audience');
