@@ -153,7 +153,7 @@ if($vendor){
    echo '<p class="muted small">This atomically creates the student profile, creates or links the guardian and reserves a section seat. For an existing guardian email, the existing guardian account is linked.</p>';
    form_start('admission_enroll','admissions');pick('Approved Application','application_id',opts($approved,'id','applicant_name'));field('Admission Number','admission_no');
    field('Student Initial Password (12+ chars)','student_password','password');
-   field('Guardian Initial Password (new guardians only, 12+ chars)','guardian_password','password');
+   field('Guardian Initial Password (only for a new guardian, 12+ chars)','guardian_password','password','',false);
    form_end('Create Student & Enroll');end_panel();
  }
  if($page==='setup'){
