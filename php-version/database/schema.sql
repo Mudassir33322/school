@@ -81,6 +81,38 @@ CREATE TABLE IF NOT EXISTS student_profiles (
  FOREIGN KEY(user_id) REFERENCES users(id), FOREIGN KEY(parent_user_id) REFERENCES users(id),
  FOREIGN KEY(class_id) REFERENCES classes(id), FOREIGN KEY(section_id) REFERENCES sections(id)
 ) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS admission_applications (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+ school_id BIGINT UNSIGNED NOT NULL,
+ branch_id BIGINT UNSIGNED NOT NULL,
+ class_id BIGINT UNSIGNED NOT NULL,
+ section_id BIGINT UNSIGNED NOT NULL,
+ applicant_name VARCHAR(160) NOT NULL,
+ applicant_email VARCHAR(190) NOT NULL,
+ guardian_name VARCHAR(160) NOT NULL,
+ guardian_email VARCHAR(190) NOT NULL,
+ guardian_phone VARCHAR(48) NOT NULL,
+ status ENUM('pending','approved','rejected','enrolled') NOT NULL DEFAULT 'pending',
+ reviewed_by BIGINT UNSIGNED DEFAULT NULL,
+ reviewed_at DATETIME DEFAULT NULL,
+ enrolled_student_user_id BIGINT UNSIGNED DEFAULT NULL,
+ enrolled_parent_user_id BIGINT UNSIGNED DEFAULT NULL,
+ admission_number VARCHAR(64) DEFAULT NULL,
+ created_by BIGINT UNSIGNED NOT NULL,
+ created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ UNIQUE KEY unique_admission_applicant (school_id,applicant_email),
+ UNIQUE KEY unique_application_admission_number (school_id,admission_number),
+ KEY idx_school_status (school_id,status,created_at),
+ FOREIGN KEY (school_id) REFERENCES schools(id) ON DELETE CASCADE,
+ FOREIGN KEY (branch_id) REFERENCES branches(id),
+ FOREIGN KEY (class_id) REFERENCES classes(id),
+ FOREIGN KEY (section_id) REFERENCES sections(id),
+ FOREIGN KEY (created_by) REFERENCES users(id),
+ FOREIGN KEY (reviewed_by) REFERENCES users(id),
+ FOREIGN KEY (enrolled_student_user_id) REFERENCES users(id),
+ FOREIGN KEY (enrolled_parent_user_id) REFERENCES users(id)
+) ENGINE=InnoDB;
+
 CREATE TABLE IF NOT EXISTS teacher_allocations (
  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, school_id BIGINT UNSIGNED NOT NULL,
  branch_id BIGINT UNSIGNED NOT NULL, teacher_user_id BIGINT UNSIGNED NOT NULL,
