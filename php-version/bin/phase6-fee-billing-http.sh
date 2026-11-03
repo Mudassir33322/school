@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euxo pipefail
+set -euo pipefail
 BASE_URL="http://127.0.0.1:8080"
 COOKIE="$(mktemp)"
 PAGE="$(mktemp)"
@@ -40,19 +40,20 @@ deny403() {
 check_month() {
   php -r '
   require "app/core.php";
-  [$school,$month,$first,$second,$tuition,$transport]=array_slice($argv,1);
+  [$school,$month,$first,$second,$tuition,$firstTransport,$secondTransport]=array_slice($argv,1);
   $invoices=many("SELECT id,student_user_id,amount,source FROM fee_invoices WHERE school_id=? AND billing_month=? ORDER BY student_user_id",[(int)$school,$month]);
   if(count($invoices)!==2) {fwrite(STDERR,"Expected two invoices, found ".count($invoices)."\n");exit(1);}
   foreach($invoices as $invoice){
-    $expected=(int)$invoice["student_user_id"]===(int)$first?(float)$tuition:(float)$tuition+(float)$transport;
-    if(abs((float)$invoice["amount"]-$expected)>0.0001 || $invoice["source"]!=="monthly")exit(1);
+    $transportCharge=(int)$invoice["student_user_id"]===(int)$first?(float)$firstTransport:(float)$secondTransport;
+    $expected=(float)$tuition+$transportCharge;
+    if(abs((float)$invoice["amount"]-$expected)>0.0001 || $invoice["source"]!=="monthly") {fwrite(STDERR,"Incorrect invoice total for ".$invoice["student_user_id"].": ".$invoice["amount"]." vs ".$expected."\n");exit(1);}
     $items=many("SELECT item_type,amount FROM fee_invoice_items WHERE school_id=? AND invoice_id=?",[(int)$school,(int)$invoice["id"]]);
-    if(count($items)!==((int)$invoice["student_user_id"]===(int)$first?1:2))exit(1);
+    if(count($items)!==(1+($transportCharge>0?1:0))){fwrite(STDERR,"Incorrect number of items for ".$invoice["student_user_id"]."\n");exit(1);}
     $sum=array_sum(array_map(fn($x)=>(float)$x["amount"],$items));
-    if(abs($sum-$expected)>0.0001)exit(1);
+    if(abs($sum-$expected)>0.0001){fwrite(STDERR,"Item sum mismatch ".$sum." vs ".$expected."\n");exit(1);}
   }
   echo "PASS: $month tuition/transport invoices and item totals reconciled\n";
-  ' "$SCHOOL" "$1" "$STUDENT" "$SECOND" "$2" "1800"
+  ' "$SCHOOL" "$1" "$STUDENT" "$SECOND" "$2" "$3" "$4"
 }
 login 'admin@smoke.invalid' 'SmokeTestPassword2026!'
 post --data-urlencode 'action=fee_plan_save' --data-urlencode '_back=finance' \
@@ -60,7 +61,7 @@ post --data-urlencode 'action=fee_plan_save' --data-urlencode '_back=finance' \
 post --data-urlencode 'action=fee_month_generate' --data-urlencode '_back=finance' \
  --data-urlencode "branch_id=$BRANCH" --data-urlencode "class_id=$CLASS" \
  --data-urlencode "billing_month=$MONTH" --data-urlencode "due_date=$DUE"
-check_month "$MONTH" 2500
+check_month "$MONTH" 2500 1800 1800
 post --data-urlencode 'action=fee_month_generate' --data-urlencode '_back=finance' \
  --data-urlencode "branch_id=$BRANCH" --data-urlencode "class_id=$CLASS" \
  --data-urlencode "billing_month=$MONTH" --data-urlencode "due_date=$DUE"
@@ -73,7 +74,7 @@ check_month "$MONTH" 2500
 post --data-urlencode 'action=fee_month_generate' --data-urlencode '_back=finance' \
  --data-urlencode "branch_id=$BRANCH" --data-urlencode "class_id=$CLASS" \
  --data-urlencode "billing_month=$NEXT_MONTH" --data-urlencode "due_date=$NEXT_DUE"
-check_month "$NEXT_MONTH" 2800
+check_month "$NEXT_MONTH" 2800 0 1800
 echo 'PASS: plan changes do not alter existing invoices'
 
 login 'salary-accountant@smoke.invalid' 'TestPassword2026!'
@@ -95,5 +96,6 @@ deny403 --data-urlencode 'action=fee_month_generate' --data-urlencode '_back=fin
 curl -fsS -b "$COOKIE" "$BASE_URL/?page=finance" > "$PAGE"
 grep -q 'Monthly Invoice Line Items' "$PAGE"
 grep -q 'Class tuition' "$PAGE"
-if grep -q 'Transport: Route A' "$PAGE"; then echo 'ERROR: student can see another student transport fee item'; exit 1; fi
+OTHER_INVOICE="$(php -r 'echo "M".str_replace("-","",$argv[1])."-S".$argv[2];' "$MONTH" "$SECOND")"
+if grep -q "$OTHER_INVOICE" "$PAGE"; then echo 'ERROR: student can see another student invoice'; exit 1; fi
 echo 'PASS: student can view own charges, cannot generate invoices or see peer line items'
