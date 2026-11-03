@@ -3,7 +3,7 @@ declare(strict_types=1);
 require dirname(__DIR__) . '/app/actions.php';
 if ($_SERVER['REQUEST_METHOD']==='POST') handle_action();
 $page=(string)($_GET['page']??'dashboard');
-$allowed=['login','company','dashboard','admissions','setup','people','academics','timetable','attendance','homework','exams','finance','notices','resources','transport','reports','documents','leave'];
+$allowed=['login','company','dashboard','admissions','setup','people','academics','timetable','attendance','homework','exams','finance','payroll','notices','resources','transport','reports','documents','leave'];
 if(!in_array($page,$allowed,true)) {http_response_code(404);exit('Page not found');}
 $vendor=null;$u=null;
 if($page==='company')$vendor=require_company();
@@ -18,9 +18,10 @@ $isStudent=$role==='student';
 $isParent=$role==='parent';
 $studentIds=$u?user_children($u):[];
 $allowedPages=['dashboard'=>true,'notices'=>true,'leave'=>true];
-if($isAdmin)$allowedPages+=array_fill_keys(['admissions','setup','people','academics','timetable','attendance','homework','exams','resources','transport','reports','documents'],true);
-if($isFinance)$allowedPages+=array_fill_keys(['finance','reports'],true);
-if($isTeacher)$allowedPages+=array_fill_keys(['timetable','attendance','homework','exams','academics','reports'],true);
+if($isAdmin)$allowedPages+=array_fill_keys(['payroll','admissions','setup','people','academics','timetable','attendance','homework','exams','resources','transport','reports','documents'],true);
+if($isFinance)$allowedPages+=array_fill_keys(['finance','payroll','reports'],true);
+if($isTeacher)$allowedPages+=array_fill_keys(['payroll','timetable','attendance','homework','exams','academics','reports'],true);
+if($role==='staff')$allowedPages['payroll']=true;
 if($isStudent||$isParent)$allowedPages+=array_fill_keys(['timetable','attendance','homework','exams','finance','transport','documents'],true);
 if($u&&!isset($allowedPages[$page])) {http_response_code(403);exit('Access denied');}
 function field(string $label,string $name,string $type='text',string $value='',bool $required=true): void {
@@ -94,6 +95,19 @@ function selection_data(int $school, array $user): array{
  }
  return $data;
 }
+if($page==='payroll' && isset($_GET['print'])){
+ $printId=filter_var($_GET['print'],FILTER_VALIDATE_INT,['options'=>['min_range'=>1]]);
+ if(!$printId){http_response_code(404);exit('Payslip not found');}
+ $sql="SELECT p.*,e.full_name employee,e.role employee_role,b.name branch_name FROM payroll_entries p JOIN users e ON e.id=p.employee_user_id AND e.school_id=p.school_id LEFT JOIN branches b ON b.id=p.branch_id AND b.school_id=p.school_id WHERE p.school_id=? AND p.id=? AND p.status='paid'";
+ $args=[$school,(int)$printId];
+ if(in_array($role,['teacher','staff'],true)){$sql.=' AND p.employee_user_id=?';$args[]=(int)$u['id'];}
+ if(in_array($role,['principal','accountant'],true)){$sql.=' AND p.branch_id=?';$args[]=(int)$u['branch_id'];}
+ $payslip=one($sql,$args);
+ if(!$payslip){http_response_code(404);exit('Paid payslip not found or not accessible');}
+ $net=number_format((float)$payslip['basic']+(float)$payslip['allowance']-(float)$payslip['deduction'],2);
+ ?><!doctype html><html lang="en"><head><meta charset="utf-8"><title>Salary Payslip <?=h($payslip['month_key'])?> | <?=h($u['school_name'])?></title><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font-family:Arial,sans-serif;background:#f2f5fc;color:#152344;margin:0;padding:36px}.sheet{max-width:690px;margin:auto;background:white;padding:36px;border-radius:16px;box-shadow:0 10px 34px #17255413}.top{display:flex;justify-content:space-between;align-items:center;border-bottom:3px solid #4f46e5;padding-bottom:20px}.muted{color:#6b7280}.header{color:#312e81}table{width:100%;border-collapse:collapse;margin-top:22px}td,th{padding:13px;border-bottom:1px solid #e4e7f0;text-align:left}td:last-child,th:last-child{text-align:right}.total{font-size:21px;font-weight:bold;color:#312e81}.print{background:#4f46e5;color:white;border:0;border-radius:9px;padding:12px 18px;cursor:pointer}@media print{body{background:#fff;padding:0}.sheet{box-shadow:none;padding:0}.no-print{display:none}}</style></head><body><div class="sheet"><div class="top"><div><h1 class="header"><?=h($u['school_name'])?></h1><p class="muted">Employee Salary Payslip</p></div><div><strong><?=h($payslip['month_key'])?></strong><p class="muted">PKR</p></div></div><p><strong>Employee:</strong> <?=h($payslip['employee'])?> <span class="muted">(<?=h(ucfirst($payslip['employee_role']))?>)</span></p><p><strong>Campus:</strong> <?=h($payslip['branch_name'])?></p><p><strong>Payroll ID:</strong> <?=h($payslip['id'])?></p><table><tr><th>Component</th><th>PKR</th></tr><tr><td>Basic Salary</td><td><?=h(number_format((float)$payslip['basic'],2))?></td></tr><tr><td>Allowances</td><td><?=h(number_format((float)$payslip['allowance'],2))?></td></tr><tr><td>Deductions</td><td>-<?=h(number_format((float)$payslip['deduction'],2))?></td></tr><tr class="total"><td>Net Salary</td><td><?=h($net)?></td></tr></table><p><strong>Status:</strong> Paid (manually recorded)</p><p><strong>Date recorded:</strong> <?=h($payslip['paid_at'])?></p><p><strong>Method:</strong> <?=h(str_replace('_',' ',(string)$payslip['payment_mode']))?></p><p><strong>Reference:</strong> <?=h($payslip['payment_reference']?:'Not applicable')?></p><p class="muted">This payslip reflects the school’s internal salary record, not external bank confirmation.</p><p class="no-print"><button class="print" onclick="window.print()">Print Payslip</button></p></div></body></html><?php
+ exit;
+}
 if($page==='login'):
  $portal=($_GET['portal']??'school')==='company'?'company':'school';
 ?><!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Login | CampusOS</title><link rel="stylesheet" href="/assets/style.css"></head><body>
@@ -105,9 +119,9 @@ if($page==='login'):
 <?php field('Email','email','email');field('Password','password','password');form_end('Sign in'); ?>
 <div class="auth-links"><a href="<?=h(url('login',['portal'=>$portal==='company'?'school':'company']))?>">Switch to <?= $portal==='company'?'school':'company' ?> login</a></div></div></section></div><script src="/assets/app.js"></script></body></html>
 <?php exit;endif;
-$titleMap=['company'=>'Company Control','dashboard'=>'Dashboard','admissions'=>'Admissions','setup'=>'School Setup','people'=>'People & Enrollment','academics'=>'Academics','timetable'=>'Timetable','attendance'=>'Attendance','homework'=>'Homework','exams'=>'Examinations','finance'=>'Fees & Finance','notices'=>'Notices','resources'=>'Resources & Operations','transport'=>'Transport','reports'=>'Reports','documents'=>'Documents & Cards','leave'=>'Leave Requests'];
+$titleMap=['company'=>'Company Control','dashboard'=>'Dashboard','admissions'=>'Admissions','setup'=>'School Setup','people'=>'People & Enrollment','academics'=>'Academics','timetable'=>'Timetable','attendance'=>'Attendance','homework'=>'Homework','exams'=>'Examinations','finance'=>'Fees & Finance','payroll'=>'HR & Payroll','notices'=>'Notices','resources'=>'Resources & Operations','transport'=>'Transport','reports'=>'Reports','documents'=>'Documents & Cards','leave'=>'Leave Requests'];
 $title=$titleMap[$page]??'Dashboard';
-$navIcons=['dashboard'=>'◈','admissions'=>'▤','setup'=>'⚙','people'=>'♙','academics'=>'▦','timetable'=>'◷','attendance'=>'✓','homework'=>'✎','exams'=>'▤','finance'=>'₨','notices'=>'◇','resources'=>'▣','transport'=>'◈','reports'=>'▥','documents'=>'▤','leave'=>'◫'];
+$navIcons=['dashboard'=>'◈','admissions'=>'▤','setup'=>'⚙','people'=>'♙','academics'=>'▦','timetable'=>'◷','attendance'=>'✓','homework'=>'✎','exams'=>'▤','finance'=>'₨','payroll'=>'▦','notices'=>'◇','resources'=>'▣','transport'=>'◈','reports'=>'▥','documents'=>'▤','leave'=>'◫'];
 ?><!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title><?=h($title)?> | CampusOS</title><link rel="stylesheet" href="/assets/style.css"></head><body>
 <div class="layout"><aside class="sidebar"><div class="brand"><span class="brand-icon">C</span><span>CampusOS</span></div><nav><div class="nav-label">Workspace</div>
 <?php if($vendor):?><a href="<?=h(url('company'))?>" aria-current="page"><span class="nav-icon">◈</span>Company Control</a>
@@ -268,6 +282,62 @@ if($vendor){
    panel('Grant Fee Concession / Scholarship');form_start('fee_adjustment','finance');pick('Invoice','invoice_id',opts($invoices,'id','invoice_no'));pick('Type','adjustment_type',['concession'=>'Concession','scholarship'=>'Scholarship','waiver'=>'Waiver']);field('Amount (PKR)','amount','number');field('Reason','reason');form_end('Approve Adjustment');end_panel();
    panel('Receive Fee Payment');form_start('fee_payment','finance');pick('Invoice','invoice_id',opts($invoices,'id','invoice_no'));field('Amount Received','amount','number');pick('Mode','mode',['cash'=>'Cash','bank'=>'Bank','cheque'=>'Cheque','online_manual'=>'Manual Online']);field('Reference','reference','text','',false);form_end('Record Payment');end_panel();
   }
+ }
+ if($page==='payroll'){
+   $manages=in_array($role,['admin','principal','accountant'],true);
+   $canDraft=in_array($role,['admin','accountant'],true);
+   $canApprove=in_array($role,['admin','principal'],true);
+   $canPay=in_array($role,['admin','accountant'],true);
+   if($canDraft){
+     $employeeSql="SELECT id,CONCAT(full_name,' / ',role) name FROM users WHERE school_id=? AND role IN ('admin','principal','accountant','teacher','staff') AND status='active' AND branch_id IS NOT NULL AND id<>?";
+     $employeeArgs=[$school,(int)$u['id']];
+     if($role==='accountant'){$employeeSql.=' AND branch_id=?';$employeeArgs[]=(int)$u['branch_id'];}
+     $employeeList=many($employeeSql.' ORDER BY full_name',$employeeArgs);
+     panel('Create Monthly Salary Draft');
+     echo '<p class="muted small">Amounts in PKR. Draft must be approved before a manual payment can be recorded.</p>';
+     form_start('payroll','payroll');
+     pick('Employee','employee_user_id',opts($employeeList));
+     field('Payroll Month (YYYY-MM)','month_key','month',date('Y-m'));
+     field('Basic Salary (PKR)','basic','number');
+     field('Allowances (PKR)','allowance','number','0');
+     field('Deductions (PKR)','deduction','number','0');
+     field('Notes','notes','text','',false);
+     form_end('Save Draft');end_panel();
+   }
+   $salarySql="SELECT p.id,p.employee_user_id,u.full_name employee,b.name campus,p.month_key,p.basic,p.allowance,p.deduction,ROUND(p.basic+p.allowance-p.deduction,2) net,p.status,p.notes,p.approved_at,p.paid_at,p.payment_mode,p.payment_reference FROM payroll_entries p JOIN users u ON u.id=p.employee_user_id AND u.school_id=p.school_id LEFT JOIN branches b ON b.id=p.branch_id AND b.school_id=p.school_id WHERE p.school_id=?";
+   $salaryArgs=[$school];
+   if(in_array($role,['teacher','staff'],true)){$salarySql.=" AND p.employee_user_id=? AND p.status='paid'";$salaryArgs[]=(int)$u['id'];}
+   if(in_array($role,['principal','accountant'],true)){$salarySql.=' AND p.branch_id=?';$salaryArgs[]=(int)$u['branch_id'];}
+   $payrollRows=many($salarySql.' ORDER BY p.month_key DESC,p.id DESC LIMIT 150',$salaryArgs);
+   panel($manages?'Payroll Register':'My Paid Payslips');
+   rows_table($payrollRows,['id'=>'Payroll ID','employee'=>'Employee','campus'=>'Campus','month_key'=>'Month','basic'=>'Basic','allowance'=>'Allowances','deduction'=>'Deductions','net'=>'Net PKR','status'=>'Status','paid_at'=>'Paid On']);
+   end_panel();
+   if($canApprove){
+     $drafts=array_values(array_filter($payrollRows,fn($entry)=>$entry['status']==='draft'));
+     panel('Approve Monthly Salary');
+     form_start('payroll_approve','payroll');pick('Draft Payroll','payroll_id',opts($drafts,'id','employee'));form_end('Approve Salary');end_panel();
+   }
+   if($canPay){
+     $approved=array_values(array_filter($payrollRows,fn($entry)=>$entry['status']==='approved'));
+     panel('Record Approved Salary Payment');
+     echo '<p class="muted small">Only record payments actually made. This action does not send money or integrate with a bank.</p>';
+     form_start('payroll_pay','payroll');pick('Approved Payroll','payroll_id',opts($approved,'id','employee'));
+     pick('Payment Method','payment_mode',['cash'=>'Cash','bank'=>'Bank','cheque'=>'Cheque','manual_transfer'=>'Manual Bank Transfer']);
+     field('Bank / Receipt Reference','payment_reference','text','',false);form_end('Record Payment');end_panel();
+   }
+   $paidRows=array_values(array_filter($payrollRows,fn($entry)=>$entry['status']==='paid'));
+   panel('Print Payslips');
+   if(!$paidRows)echo '<p class="muted">No paid payroll records available yet.</p>';
+   foreach($paidRows as $paidRow){
+     $href=url('payroll',['print'=>(int)$paidRow['id']]);
+     echo '<p><a href="'.h($href).'" target="_blank" rel="noopener noreferrer">Payslip: '.h($paidRow['employee']).' — '.h($paidRow['month_key']).' (PKR '.h($paidRow['net']).')</a></p>';
+   }
+   end_panel();
+   if($manages){
+     $eventSql="SELECT ev.event_type,emp.full_name employee,p.month_key,actor.full_name performed_by,ev.note,ev.created_at FROM payroll_events ev JOIN payroll_entries p ON p.id=ev.payroll_id AND p.school_id=ev.school_id JOIN users emp ON emp.id=p.employee_user_id AND emp.school_id=p.school_id JOIN users actor ON actor.id=ev.actor_user_id AND actor.school_id=ev.school_id WHERE ev.school_id=?";
+     $eventArgs=[$school];if(in_array($role,['principal','accountant'],true)){$eventSql.=' AND p.branch_id=?';$eventArgs[]=(int)$u['branch_id'];}
+     panel('Salary Audit History');rows_table(many($eventSql.' ORDER BY ev.id DESC LIMIT 100',$eventArgs),['employee'=>'Employee','month_key'=>'Month','event_type'=>'Action','performed_by'=>'Performed By','note'=>'Note','created_at'=>'Recorded']);end_panel();
+   }
  }
  if($page==='notices'){
   if($isAdmin){panel('Publish Notice');form_start('notice','notices');field('Title','title');echo '<div class="field"><label>Message</label><textarea name="body" required></textarea></div>';pick('Audience','audience',['all'=>'Everyone','teachers'=>'Teachers','students'=>'Students','parents'=>'Parents']);form_end('Publish');end_panel();}
