@@ -204,6 +204,21 @@ CREATE TABLE IF NOT EXISTS fee_invoices (
  FOREIGN KEY(school_id) REFERENCES schools(id) ON DELETE CASCADE,
  FOREIGN KEY(branch_id) REFERENCES branches(id), FOREIGN KEY(student_user_id) REFERENCES users(id)
 ) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS fee_adjustments (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+ school_id BIGINT UNSIGNED NOT NULL,
+ invoice_id BIGINT UNSIGNED NOT NULL,
+ adjustment_type ENUM('concession','scholarship','waiver') NOT NULL,
+ amount DECIMAL(12,2) NOT NULL,
+ reason VARCHAR(255) NOT NULL,
+ approved_by BIGINT UNSIGNED NOT NULL,
+ created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ INDEX idx_adjustment_invoice (school_id,invoice_id),
+ FOREIGN KEY (school_id) REFERENCES schools(id) ON DELETE CASCADE,
+ FOREIGN KEY (invoice_id) REFERENCES fee_invoices(id),
+ FOREIGN KEY (approved_by) REFERENCES users(id),
+ CONSTRAINT chk_fee_adjustment_amount CHECK (amount > 0)
+) ENGINE=InnoDB;
 CREATE TABLE IF NOT EXISTS fee_payments (
  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, school_id BIGINT UNSIGNED NOT NULL,
  invoice_id BIGINT UNSIGNED NOT NULL, amount DECIMAL(12,2) NOT NULL,
