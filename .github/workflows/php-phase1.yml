@@ -1,0 +1,80 @@
+name: Core PHP Phase 1 Checks
+on:
+  push:
+    branches: [core-php-mysql-conversion]
+    paths:
+      - 'php-version/**'
+      - '.github/workflows/php-phase1.yml'
+  pull_request:
+    paths:
+      - 'php-version/**'
+permissions:
+  contents: read
+jobs:
+  lint-and-smoke:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root_test_password
+          MYSQL_DATABASE: campusos
+          MYSQL_USER: campusos
+          MYSQL_PASSWORD: test_password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot_test_password"
+          --health-interval=5s --health-timeout=5s --health-retries=20
+    defaults:
+      run:
+        working-directory: php-version
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: pdo_mysql, mbstring
+          coverage: none
+      - name: PHP syntax check
+        run: |
+          set -e
+          find . -name '*.php' -not -path './config.php' -print0 | xargs -0 -n1 php -l
+      - name: Prepare test configuration
+        run: |
+          cat > config.php <<'PHP'
+          <?php
+          return [
+            'app_name'=>'CampusOS',
+            'app_url'=>'http://127.0.0.1:8080',
+            'app_env'=>'test',
+            'db_host'=>'127.0.0.1',
+            'db_port'=>3306,
+            'db_name'=>'campusos',
+            'db_user'=>'campusos',
+            'db_pass'=>'test_password',
+            'timezone'=>'Asia/Karachi',
+          ];
+          PHP
+      - name: Load database schema
+        run: mysql -h 127.0.0.1 -u campusos -ptest_password campusos < database/schema.sql
+      - name: Verify PHP MySQL preflight
+        run: php bin/check.php
+      - name: Bootstrap isolated school account
+        run: |
+          printf 'SmokeTestPassword2026!\n' | php bin/install.php school 'Smoke Test School' smoke-school admin@smoke.invalid
+          php -r "require 'app/core.php'; if (!one('SELECT id FROM schools WHERE code=?',['smoke-school'])) exit(1); echo 'Bootstrap OK'.PHP_EOL;"
+      - name: HTTP login-page smoke
+        run: |
+          php -S 127.0.0.1:8080 -t public > /tmp/campusos-php.log 2>&1 &
+          server_pid=$!
+          trap 'kill $server_pid 2>/dev/null || true' EXIT
+          for retry in $(seq 1 15); do
+            if curl -fsS 'http://127.0.0.1:8080/?page=login' -o /tmp/campusos-login.html; then break; fi
+            sleep 1
+          done
+          grep -q 'Welcome back' /tmp/campusos-login.html
+          grep -q 'school_code' /tmp/campusos-login.html
+          curl -fsS 'http://127.0.0.1:8080/assets/style.css' -o /dev/null
+          test -s /tmp/campusos-login.html
