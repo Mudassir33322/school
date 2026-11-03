@@ -482,6 +482,50 @@ CREATE TABLE IF NOT EXISTS leave_requests (
  FOREIGN KEY(school_id) REFERENCES schools(id) ON DELETE CASCADE,
  FOREIGN KEY(user_id) REFERENCES users(id)
 ) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS gl_accounts (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+ school_id BIGINT UNSIGNED NOT NULL,
+ account_code VARCHAR(24) NOT NULL,
+ account_name VARCHAR(160) NOT NULL,
+ account_type ENUM('asset','liability','equity','income','expense') NOT NULL,
+ is_active TINYINT(1) NOT NULL DEFAULT 1,
+ created_by BIGINT UNSIGNED NOT NULL,
+ created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ UNIQUE KEY uq_gl_account_code (school_id,account_code),
+ FOREIGN KEY (school_id) REFERENCES schools(id) ON DELETE CASCADE,
+ FOREIGN KEY (created_by) REFERENCES users(id)
+) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS gl_journals (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+ school_id BIGINT UNSIGNED NOT NULL,
+ branch_id BIGINT UNSIGNED NOT NULL,
+ journal_date DATE NOT NULL,
+ reference VARCHAR(80) NOT NULL,
+ description VARCHAR(255) NOT NULL,
+ entry_type ENUM('manual') NOT NULL DEFAULT 'manual',
+ created_by BIGINT UNSIGNED NOT NULL,
+ posted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ UNIQUE KEY uq_gl_journal_reference (school_id,reference),
+ INDEX idx_gl_journal_branch_date (school_id,branch_id,journal_date),
+ FOREIGN KEY (school_id) REFERENCES schools(id) ON DELETE CASCADE,
+ FOREIGN KEY (branch_id) REFERENCES branches(id),
+ FOREIGN KEY (created_by) REFERENCES users(id)
+) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS gl_journal_lines (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+ school_id BIGINT UNSIGNED NOT NULL,
+ journal_id BIGINT UNSIGNED NOT NULL,
+ account_id BIGINT UNSIGNED NOT NULL,
+ debit DECIMAL(14,2) NOT NULL DEFAULT 0,
+ credit DECIMAL(14,2) NOT NULL DEFAULT 0,
+ line_note VARCHAR(190) NOT NULL DEFAULT '',
+ INDEX idx_gl_account (school_id,account_id),
+ INDEX idx_gl_journal (school_id,journal_id),
+ FOREIGN KEY (school_id) REFERENCES schools(id) ON DELETE CASCADE,
+ FOREIGN KEY (journal_id) REFERENCES gl_journals(id),
+ FOREIGN KEY (account_id) REFERENCES gl_accounts(id),
+ CONSTRAINT chk_gl_line_sides CHECK ((debit > 0 AND credit = 0) OR (credit > 0 AND debit = 0))
+) ENGINE=InnoDB;
 CREATE TABLE IF NOT EXISTS audit_logs (
  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, school_id BIGINT UNSIGNED DEFAULT NULL,
  user_id BIGINT UNSIGNED DEFAULT NULL, event VARCHAR(80) NOT NULL,
