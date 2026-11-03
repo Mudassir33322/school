@@ -398,6 +398,48 @@ if($vendor){
   if($role==='accountant'){$refundSql.=' AND fi.branch_id=?';$refundArgs[]=(int)$u['branch_id'];}
   panel('Refund Audit History');
   rows_table(many($refundSql.' ORDER BY r.id DESC LIMIT 150',$refundArgs),['invoice_no'=>'Invoice','payment_id'=>'Original Payment','student'=>'Student','amount'=>'Refund PKR','mode'=>'Method','reference'=>'Reference','reason'=>'Reason','created_at'=>'Recorded']);end_panel();
+  // Payment/refund/concession credit is allocated oldest-installment-first at read time.
+  // No additional invoice or duplicate cash entry is created by a schedule.
+  $scheduleSql="SELECT pl.id,pl.invoice_id,pl.installment_count,fi.invoice_no,fi.student_user_id,u.full_name student,fi.amount invoice_amount,COALESCE((SELECT SUM(fp.amount) FROM fee_payments fp WHERE fp.school_id=fi.school_id AND fp.invoice_id=fi.id),0) gross_paid,COALESCE((SELECT SUM(fr.amount) FROM fee_refunds fr WHERE fr.school_id=fi.school_id AND fr.invoice_id=fi.id),0) refunded,COALESCE((SELECT SUM(fa.amount) FROM fee_adjustments fa WHERE fa.school_id=fi.school_id AND fa.invoice_id=fi.id),0) concessions FROM fee_installment_plans pl JOIN fee_invoices fi ON fi.id=pl.invoice_id AND fi.school_id=pl.school_id JOIN users u ON u.id=fi.student_user_id AND u.school_id=fi.school_id WHERE pl.school_id=?";
+  $scheduleArgs=[$school];
+  if($isStudent||$isParent){[$scope,$a]=student_filter('fi.student_user_id',$studentIds);$scheduleSql.=' AND '.$scope;$scheduleArgs=array_merge($scheduleArgs,$a);}
+  if($role==='accountant'){$scheduleSql.=' AND fi.branch_id=?';$scheduleArgs[]=(int)$u['branch_id'];}
+  $scheduleRows=many($scheduleSql.' ORDER BY pl.id DESC LIMIT 200',$scheduleArgs);
+  $plansById=[];
+  foreach($scheduleRows as $p)$plansById[(int)$p['id']]=$p;
+  $installmentView=[];
+  if($plansById){
+   $planIds=array_keys($plansById);
+   $placeholders=implode(',',array_fill(0,count($planIds),'?'));
+   $installmentRows=many("SELECT id,plan_id,sequence_no,due_date,amount FROM fee_installments WHERE school_id=? AND plan_id IN ($placeholders) ORDER BY plan_id,sequence_no",array_merge([$school],$planIds));
+   $credits=[];
+   foreach($plansById as $planId=>$plan)$credits[$planId]=max(0,round((float)$plan['gross_paid']-(float)$plan['refunded']+(float)$plan['concessions'],2));
+   foreach($installmentRows as $row){
+    $planId=(int)$row['plan_id'];$plan=$plansById[$planId];$charge=round((float)$row['amount'],2);
+    $covered=min($charge,$credits[$planId]);$credits[$planId]=max(0,round($credits[$planId]-$covered,2));
+    $remaining=max(0,round($charge-$covered,2));
+    $installmentView[]=[
+      'invoice_no'=>$plan['invoice_no'],'student'=>$plan['student'],'sequence_no'=>$row['sequence_no'],
+      'due_date'=>$row['due_date'],'amount'=>number_format($charge,2,'.',''),
+      'covered'=>number_format($covered,2,'.',''),'remaining'=>number_format($remaining,2,'.',''),
+      'status'=>$remaining<0.005?'Settled':($row['due_date']<date('Y-m-d')?'Overdue':'Pending'),
+    ];
+   }
+  }
+  panel('Installment Schedule & Live Dues');
+  echo '<p class="muted small">Net payments plus concessions are applied against the oldest installment first. Refunds reverse part of that credit. Original invoice amount remains unchanged.</p>';
+  rows_table($installmentView,['invoice_no'=>'Invoice','student'=>'Student','sequence_no'=>'#','due_date'=>'Due Date','amount'=>'Scheduled (PKR)','covered'=>'Covered','remaining'=>'Outstanding','status'=>'Status']);end_panel();
+  if($isFinance){
+   $scheduledIds=array_fill_keys(array_map(fn($p)=>(int)$p['invoice_id'],$scheduleRows),true);
+   $unscheduled=array_values(array_filter($invoices,fn($row)=>!isset($scheduledIds[(int)$row['id']])));
+   panel('Create Monthly Installment Schedule');
+   echo '<p class="muted small">For an existing invoice only. Choose 2–12 equal installments (last installment absorbs rounding). Plans cannot be edited or duplicated in this preview. No extra fee is charged.</p>';
+   form_start('fee_installments_create','finance');
+   pick('Invoice','invoice_id',opts($unscheduled,'id','invoice_no'));
+   pick('Number of Installments','installment_count',array_combine(range(2,12),range(2,12)));
+   field('First Due Date','first_due_date','date',date('Y-m-d'));
+   form_end('Create Installment Schedule');end_panel();
+  }
   if($isFinance){
    panel('Grant Fee Concession / Scholarship');form_start('fee_adjustment','finance');pick('Invoice','invoice_id',opts($invoices,'id','invoice_no'));pick('Type','adjustment_type',['concession'=>'Concession','scholarship'=>'Scholarship','waiver'=>'Waiver']);field('Amount (PKR)','amount','number');field('Reason','reason');form_end('Approve Adjustment');end_panel();
    panel('Receive Fee Payment');form_start('fee_payment','finance');pick('Invoice','invoice_id',opts($invoices,'id','invoice_no'));field('Amount Received','amount','number');pick('Mode','mode',['cash'=>'Cash','bank'=>'Bank','cheque'=>'Cheque','online_manual'=>'Manual Online']);field('Reference','reference','text','',false);form_end('Record Payment');end_panel();
