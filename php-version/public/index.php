@@ -3,7 +3,7 @@ declare(strict_types=1);
 require dirname(__DIR__) . '/app/actions.php';
 if ($_SERVER['REQUEST_METHOD']==='POST') handle_action();
 $page=(string)($_GET['page']??'dashboard');
-$allowed=['login','company','dashboard','admissions','setup','people','academics','timetable','attendance','homework','exams','finance','notices','resources','reports','documents','leave'];
+$allowed=['login','company','dashboard','admissions','setup','people','academics','timetable','attendance','homework','exams','finance','notices','resources','transport','reports','documents','leave'];
 if(!in_array($page,$allowed,true)) {http_response_code(404);exit('Page not found');}
 $vendor=null;$u=null;
 if($page==='company')$vendor=require_company();
@@ -18,10 +18,10 @@ $isStudent=$role==='student';
 $isParent=$role==='parent';
 $studentIds=$u?user_children($u):[];
 $allowedPages=['dashboard'=>true,'notices'=>true,'leave'=>true];
-if($isAdmin)$allowedPages+=array_fill_keys(['admissions','setup','people','academics','timetable','attendance','homework','exams','resources','reports','documents'],true);
+if($isAdmin)$allowedPages+=array_fill_keys(['admissions','setup','people','academics','timetable','attendance','homework','exams','resources','transport','reports','documents'],true);
 if($isFinance)$allowedPages+=array_fill_keys(['finance','reports'],true);
 if($isTeacher)$allowedPages+=array_fill_keys(['timetable','attendance','homework','exams','academics','reports'],true);
-if($isStudent||$isParent)$allowedPages+=array_fill_keys(['timetable','attendance','homework','exams','finance','documents'],true);
+if($isStudent||$isParent)$allowedPages+=array_fill_keys(['timetable','attendance','homework','exams','finance','transport','documents'],true);
 if($u&&!isset($allowedPages[$page])) {http_response_code(403);exit('Access denied');}
 function field(string $label,string $name,string $type='text',string $value='',bool $required=true): void {
  echo '<div class="field"><label for="'.h($name).'">'.h($label).'</label><input id="'.h($name).'" name="'.h($name).'" type="'.h($type).'" value="'.h($value).'"'.($required?' required':'').'></div>';
@@ -105,9 +105,9 @@ if($page==='login'):
 <?php field('Email','email','email');field('Password','password','password');form_end('Sign in'); ?>
 <div class="auth-links"><a href="<?=h(url('login',['portal'=>$portal==='company'?'school':'company']))?>">Switch to <?= $portal==='company'?'school':'company' ?> login</a></div></div></section></div><script src="/assets/app.js"></script></body></html>
 <?php exit;endif;
-$titleMap=['company'=>'Company Control','dashboard'=>'Dashboard','admissions'=>'Admissions','setup'=>'School Setup','people'=>'People & Enrollment','academics'=>'Academics','timetable'=>'Timetable','attendance'=>'Attendance','homework'=>'Homework','exams'=>'Examinations','finance'=>'Fees & Finance','notices'=>'Notices','resources'=>'Resources & Operations','reports'=>'Reports','documents'=>'Documents & Cards','leave'=>'Leave Requests'];
+$titleMap=['company'=>'Company Control','dashboard'=>'Dashboard','admissions'=>'Admissions','setup'=>'School Setup','people'=>'People & Enrollment','academics'=>'Academics','timetable'=>'Timetable','attendance'=>'Attendance','homework'=>'Homework','exams'=>'Examinations','finance'=>'Fees & Finance','notices'=>'Notices','resources'=>'Resources & Operations','transport'=>'Transport','reports'=>'Reports','documents'=>'Documents & Cards','leave'=>'Leave Requests'];
 $title=$titleMap[$page]??'Dashboard';
-$navIcons=['dashboard'=>'◈','admissions'=>'▤','setup'=>'⚙','people'=>'♙','academics'=>'▦','timetable'=>'◷','attendance'=>'✓','homework'=>'✎','exams'=>'▤','finance'=>'₨','notices'=>'◇','resources'=>'▣','reports'=>'▥','documents'=>'▤','leave'=>'◫'];
+$navIcons=['dashboard'=>'◈','admissions'=>'▤','setup'=>'⚙','people'=>'♙','academics'=>'▦','timetable'=>'◷','attendance'=>'✓','homework'=>'✎','exams'=>'▤','finance'=>'₨','notices'=>'◇','resources'=>'▣','transport'=>'◈','reports'=>'▥','documents'=>'▤','leave'=>'◫'];
 ?><!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title><?=h($title)?> | CampusOS</title><link rel="stylesheet" href="/assets/style.css"></head><body>
 <div class="layout"><aside class="sidebar"><div class="brand"><span class="brand-icon">C</span><span>CampusOS</span></div><nav><div class="nav-label">Workspace</div>
 <?php if($vendor):?><a href="<?=h(url('company'))?>" aria-current="page"><span class="nav-icon">◈</span>Company Control</a>
@@ -286,10 +286,41 @@ if($vendor){
   panel('Return Library Book');form_start('library_return','resources');pick('Active Loan','loan_id',opts($activeLoans,'id','book'));form_end('Mark Returned');end_panel();
   panel('Recent Library Returns');rows_table(many("SELECT b.title book,u.full_name borrower,l.returned_at,l.due_date FROM library_loans l JOIN library_books b ON b.id=l.book_id AND b.school_id=l.school_id JOIN users u ON u.id=l.borrower_user_id AND u.school_id=l.school_id WHERE l.school_id=? AND l.returned_at IS NOT NULL ORDER BY l.returned_at DESC LIMIT 60",[$school]),['book'=>'Book','borrower'=>'Borrower','due_date'=>'Due Date','returned_at'=>'Returned At']);end_panel();
 
-  panel('Transport Routes');rows_table(many('SELECT name,vehicle,driver_name,monthly_fee FROM transport_routes WHERE school_id=?',[$school]),['name'=>'Route','vehicle'=>'Vehicle','driver_name'=>'Driver','monthly_fee'=>'Monthly Fee']);end_panel();
-  panel('Register Route');form_start('transport_route','resources');pick('Branch','branch_id',$branches);field('Route','name');field('Vehicle','vehicle','text','',false);field('Driver','driver_name','text','',false);field('Monthly Fee','monthly_fee','number','0');form_end();end_panel();
-  panel('Inventory');rows_table(many('SELECT name,sku,quantity FROM inventory_items WHERE school_id=?',[$school]),['name'=>'Item','sku'=>'SKU','quantity'=>'Stock']);end_panel();
-  panel('Add Inventory Item');form_start('inventory_item','resources');pick('Branch','branch_id',$branches);field('Item Name','name');field('SKU','sku','text','',false);field('Quantity','quantity','number','0');form_end();end_panel();
+  $stockSql='SELECT i.id,i.name,i.sku,i.quantity,b.name campus FROM inventory_items i JOIN branches b ON b.id=i.branch_id AND b.school_id=i.school_id WHERE i.school_id=?';
+  $stockArgs=[$school];if($role==='principal'){$stockSql.=' AND i.branch_id=?';$stockArgs[]=(int)$u['branch_id'];}
+  $inventory=many($stockSql.' ORDER BY i.name',$stockArgs);
+  panel('Live Inventory Balances');rows_table($inventory,['name'=>'Item','sku'=>'SKU','quantity'=>'Available','campus'=>'Campus']);end_panel();
+  panel('Register Inventory Item');form_start('inventory_item','resources');pick('Branch','branch_id',$branches);field('Item Name','name');field('SKU','sku','text','',false);field('Opening Quantity','quantity','number','0');form_end('Create Item');end_panel();
+  panel('Receive / Issue Stock');form_start('inventory_move','resources');pick('Inventory Item','item_id',opts($inventory));pick('Movement','movement_type',['receipt'=>'Receive into stock','issue'=>'Issue from stock']);field('Quantity','quantity','number');field('Reason / Reference','reason');form_end('Record Stock Movement');end_panel();
+  $ledgerSql="SELECT im.id,i.name item,b.name campus,im.movement_type,im.quantity,im.balance_before,im.balance_after,im.reason,im.created_at FROM inventory_movements im JOIN inventory_items i ON i.id=im.item_id AND i.school_id=im.school_id JOIN branches b ON b.id=im.branch_id AND b.school_id=im.school_id WHERE im.school_id=?";
+  $ledgerArgs=[$school];if($role==='principal'){$ledgerSql.=' AND im.branch_id=?';$ledgerArgs[]=(int)$u['branch_id'];}
+  panel('Stock Movement Ledger');rows_table(many($ledgerSql.' ORDER BY im.id DESC LIMIT 150',$ledgerArgs),['item'=>'Item','campus'=>'Branch','movement_type'=>'Movement','quantity'=>'Quantity','balance_before'=>'Before','balance_after'=>'After','reason'=>'Reason','created_at'=>'Date']);end_panel();
+ }
+
+ if($page==='transport'){
+   $routeSql="SELECT tr.id,tr.name,tr.vehicle,tr.driver_name,tr.monthly_fee,tr.seat_capacity,b.name campus,(SELECT COUNT(*) FROM transport_assignments a WHERE a.school_id=tr.school_id AND a.route_id=tr.id AND a.released_at IS NULL) occupied FROM transport_routes tr JOIN branches b ON b.id=tr.branch_id AND b.school_id=tr.school_id WHERE tr.school_id=?";
+   $routeArgs=[$school];
+   if($role==='principal'){$routeSql.=' AND tr.branch_id=?';$routeArgs[]=(int)$u['branch_id'];}
+   if($isStudent||$isParent){[$scope,$userParams]=student_filter('x.student_user_id',$studentIds);$routeSql.=' AND EXISTS (SELECT 1 FROM transport_assignments x WHERE x.school_id=tr.school_id AND x.route_id=tr.id AND x.released_at IS NULL AND '.$scope.')';$routeArgs=array_merge($routeArgs,$userParams);}
+   $routes=many($routeSql.' ORDER BY tr.name',$routeArgs);
+   panel($isAdmin?'Transport Routes & Seat Availability':'Your Transport Route');
+   rows_table($routes,['name'=>'Route','campus'=>'Campus','vehicle'=>'Vehicle','driver_name'=>'Driver','monthly_fee'=>'Monthly Fee (PKR)','seat_capacity'=>'Total Seats','occupied'=>'Assigned Seats']);end_panel();
+   if($isAdmin){
+     panel('Register Transport Route');form_start('transport_route','transport');pick('Branch','branch_id',$branches);field('Route Name','name');field('Vehicle','vehicle','text','',false);field('Driver','driver_name','text','',false);field('Monthly Fee (PKR)','monthly_fee','number','0');field('Seat Capacity','seat_capacity','number','30');form_end('Create Route');end_panel();
+     panel('Assign Student To Transport');form_start('transport_assign','transport');pick('Route','route_id',opts($routes));pick('Enrolled Student','student_user_id',$students);form_end('Assign Seat');end_panel();
+   }
+   $sql="SELECT ta.id,u.full_name student,tr.name route,tr.vehicle,tr.driver_name,ta.assigned_on,ta.released_at,b.name campus FROM transport_assignments ta JOIN users u ON u.id=ta.student_user_id AND u.school_id=ta.school_id JOIN transport_routes tr ON tr.id=ta.route_id AND tr.school_id=ta.school_id JOIN branches b ON b.id=ta.branch_id AND b.school_id=ta.school_id WHERE ta.school_id=?";
+   $args=[$school];
+   if($role==='principal'){$sql.=' AND ta.branch_id=?';$args[]=(int)$u['branch_id'];}
+   if($isStudent||$isParent){[$scope,$a]=student_filter('ta.student_user_id',$studentIds);$sql.=' AND '.$scope;$args=array_merge($args,$a);}
+   if(!$isAdmin)$sql.=' AND ta.released_at IS NULL';
+   $assignments=many($sql.' ORDER BY ta.id DESC LIMIT 150',$args);
+   panel($isAdmin?'Student Route Assignments':'Student Pickup & Drop-off');
+   rows_table($assignments,['student'=>'Student','route'=>'Route','vehicle'=>'Vehicle','driver_name'=>'Driver','campus'=>'Campus','assigned_on'=>'Assigned','released_at'=>'Released']);end_panel();
+   if($isAdmin){
+     $active=array_values(array_filter($assignments,fn($item)=>$item['released_at']===null));
+     panel('Release Student From Route');form_start('transport_release','transport');pick('Active Assignment','assignment_id',opts($active,'id','student'));form_end('Release Seat');end_panel();
+   }
  }
  if($page==='reports'){
   panel('School Summary');
