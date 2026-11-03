@@ -120,6 +120,9 @@ if($vendor){
  if($page==='setup'){
   panel('Create Branch');form_start('branch','setup');field('Branch Name','name');field('Code','code');field('City','city','text','',false);form_end();end_panel();
   panel('Academic Year');form_start('academic_session','setup');field('Session Name','name');field('Start Date','start_date','date');field('End Date','end_date','date');form_end();end_panel();
+  $sessions=many('SELECT id,name,start_date,end_date,is_current FROM school_sessions WHERE school_id=? ORDER BY start_date DESC',[$school]);
+  panel('Academic Sessions');rows_table($sessions,['name'=>'Session','start_date'=>'Start','end_date'=>'End','is_current'=>'Current']);end_panel();
+  panel('Set Current Academic Session');form_start('session_activate','setup');pick('Academic Session','session_id',opts($sessions));form_end('Activate Session');end_panel();
   panel('Add Class');form_start('class','setup');field('Class Name','name');form_end();end_panel();
   panel('Add Section');form_start('section','setup');pick('Branch','branch_id',$branches);pick('Class','class_id',$classes);field('Section Name','name');field('Capacity','capacity','number','40');form_end();end_panel();
   panel('Add Subject');form_start('subject','setup');field('Subject Name','name');field('Subject Code','code');form_end();end_panel();
@@ -163,7 +166,7 @@ if($vendor){
  }
  if($page==='homework'){
   if($isAdmin||$isTeacher){
-   panel('Assign Homework');form_start('homework','homework');pick('Class','class_id',$classes);pick('Section','section_id',$sections);pick('Subject','subject_id',$subjects);field('Title','title');echo '<div class="field"><label>Instructions</label><textarea name="instructions" required></textarea></div>';field('Due At','due_at','datetime-local');field('Close At','close_at','datetime-local');field('Maximum Marks','max_marks','number','10');form_end();end_panel();
+   panel('Assign Homework');form_start('homework','homework');pick('Class','class_id',$classes);pick('Section','section_id',$sections);pick('Subject','subject_id',$subjects);if($isAdmin)pick('Assigned Teacher','teacher_user_id',$teachers);field('Title','title');echo '<div class="field"><label>Instructions</label><textarea name="instructions" required></textarea></div>';field('Due At','due_at','datetime-local');field('Close At','close_at','datetime-local');field('Maximum Marks','max_marks','number','10');form_end();end_panel();
   }
   $sql='SELECT hw.id,hw.title,hw.instructions,c.name class_name,s.name section_name,sub.name subject,hw.due_at,hw.close_at,hw.max_marks FROM homework hw JOIN classes c ON c.id=hw.class_id JOIN sections s ON s.id=hw.section_id JOIN subjects sub ON sub.id=hw.subject_id WHERE hw.school_id=?';$args=[$school];
   if($isTeacher){$sql.=' AND EXISTS(SELECT 1 FROM teacher_allocations ta WHERE ta.school_id=hw.school_id AND ta.section_id=hw.section_id AND ta.subject_id=hw.subject_id AND ta.teacher_user_id=?)';$args[]=$u['id'];}
