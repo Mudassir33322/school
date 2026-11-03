@@ -90,7 +90,7 @@ function handle_action(): never {
    run("UPDATE schools SET status=? WHERE id=?",[$status,$school]);audit(null,null,'status','school',$school);flash('School status updated.');redirect('company');
   }
   $u=require_school();$school=(int)$u['school_id'];$actor=(int)$u['id'];$branch=(int)($u['branch_id']??0);
-  if(in_array($action,['branch','academic_session','class','section','subject','person','student_enrollment','allocation','timetable','notice','library_book','transport_route','inventory_item','certificate','fee_invoice','payroll'],true)){
+  if(in_array($action,['branch','academic_session','session_activate','class','section','subject','person','student_enrollment','allocation','timetable','notice','library_book','transport_route','inventory_item','certificate','fee_invoice','payroll'],true)){
    require_roles(['admin','principal','accountant']);
    $academic=['branch','academic_session','class','section','subject','person','student_enrollment','allocation','timetable','notice','library_book','transport_route','inventory_item','certificate'];
    if(in_array($action,$academic,true)&&$u['role']==='accountant')throw new InvalidArgumentException('Accountant access restricted');
@@ -106,6 +106,15 @@ function handle_action(): never {
     $start=date_input('start_date');$end=date_input('end_date');
     if($end<=$start)throw new InvalidArgumentException('End date must be later');
     run("INSERT INTO school_sessions(school_id,name,start_date,end_date,is_current) VALUES (?,?,?,?,0)",[$school,required_text('name',60),$start,$end]);
+    break;
+   case 'session_activate':
+    $session=assert_school_row('school_sessions',positive_id('session_id'),$school);
+    db()->beginTransaction();
+    try {
+     run('UPDATE school_sessions SET is_current=0 WHERE school_id=?',[$school]);
+     run('UPDATE school_sessions SET is_current=1 WHERE id=? AND school_id=?',[$session['id'],$school]);
+     db()->commit();
+    }catch(Throwable $e){db()->rollBack();throw $e;}
     break;
    case 'class':
     run("INSERT INTO classes(school_id,name) VALUES (?,?)",[$school,required_text('name',80)]);break;
@@ -125,12 +134,20 @@ function handle_action(): never {
    case 'student_enrollment':
     $id=positive_id('student_user_id');$parent=($_POST['parent_user_id']??'')!==''?positive_id('parent_user_id'):null;
     $b=positive_id('branch_id');$c=positive_id('class_id');$s=positive_id('section_id');
-    school_user($id,$school,'student');if($parent)school_user($parent,$school,'parent');
+    $studentAccount=school_user($id,$school,'student');
+    if($parent)school_user($parent,$school,'parent');
     assert_branch($b,$school);ownership('classes',$c,$school);verify_section($school,$s,$c,$b);
-    $count=(int)(one("SELECT COUNT(*) n FROM student_profiles WHERE school_id=? AND section_id=?",[$school,$s])['n']??0);
-    $max=(int)assert_school_row('sections',$s,$school)['capacity'];
-    if($count>=$max)throw new InvalidArgumentException('Section is full');
-    run("INSERT INTO student_profiles(school_id,branch_id,user_id,parent_user_id,class_id,section_id,admission_no,roll_no) VALUES (?,?,?,?,?,?,?,?)",[$school,$b,$id,$parent,$c,$s,required_text('admission_no',64),trim((string)($_POST['roll_no']??''))]);
+    if((int)$studentAccount['branch_id']!==$b)throw new InvalidArgumentException('Student account branch must match enrollment branch');
+    // Lock the section row to serialize capacity checks for concurrent enrollments.
+    db()->beginTransaction();
+    try {
+     $section=one('SELECT id,capacity FROM sections WHERE school_id=? AND id=? FOR UPDATE',[$school,$s]);
+     if(!$section)throw new InvalidArgumentException('Section no longer exists');
+     $count=(int)(one('SELECT COUNT(*) n FROM student_profiles WHERE school_id=? AND section_id=?',[$school,$s])['n']??0);
+     if($count >= (int)$section['capacity'])throw new InvalidArgumentException('Section is full');
+     run("INSERT INTO student_profiles(school_id,branch_id,user_id,parent_user_id,class_id,section_id,admission_no,roll_no) VALUES (?,?,?,?,?,?,?,?)",[$school,$b,$id,$parent,$c,$s,required_text('admission_no',64),trim((string)($_POST['roll_no']??''))]);
+     db()->commit();
+    }catch(Throwable $e){db()->rollBack();throw $e;}
     break;
    case 'allocation':
     $teacher=positive_id('teacher_user_id');$c=positive_id('class_id');$s=positive_id('section_id');$sub=positive_id('subject_id');
@@ -165,11 +182,14 @@ function handle_action(): never {
     $c=positive_id('class_id');$s=positive_id('section_id');$sub=positive_id('subject_id');
     ownership('classes',$c,$school);ownership('subjects',$sub,$school);$section=verify_section($school,$s,$c);
     if(!is_teacher_assigned($u,$c,$s,$sub)||!allowed_branch($u,(int)$section['branch_id']))throw new InvalidArgumentException('Not assigned to this subject / branch');
+    $assignedTeacher=$u['role']==='teacher'?$actor:positive_id('teacher_user_id');
+    $teacherAccount=school_user($assignedTeacher,$school,'teacher');
+    if((int)$teacherAccount['branch_id']!==(int)$section['branch_id']||!is_teacher_assigned(['id'=>$assignedTeacher,'role'=>'teacher','school_id'=>$school],$c,$s,$sub))throw new InvalidArgumentException('Choose an allocated teacher for this subject');
     $due=required_text('due_at',20);$close=required_text('close_at',20);
     if(!strtotime($due)||!strtotime($close)||strtotime($close)<strtotime($due))throw new InvalidArgumentException('Closing time must follow due time');
     $max=money_input('max_marks');if($max<=0||$max>1000)throw new InvalidArgumentException('Invalid max marks');
     run("INSERT INTO homework(school_id,branch_id,class_id,section_id,subject_id,teacher_user_id,title,instructions,due_at,close_at,max_marks) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-     [$school,$section['branch_id'],$c,$s,$sub,$actor,required_text('title'),required_text('instructions',50000),str_replace('T',' ',$due),str_replace('T',' ',$close),$max]);break;
+     [$school,$section['branch_id'],$c,$s,$sub,$assignedTeacher,required_text('title'),required_text('instructions',50000),str_replace('T',' ',$due),str_replace('T',' ',$close),$max]);break;
    case 'homework_submit':
     require_roles(['student']);
     $hw=assert_school_row('homework',positive_id('homework_id'),$school);
