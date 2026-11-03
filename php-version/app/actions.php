@@ -90,14 +90,61 @@ function handle_action(): never {
    run("UPDATE schools SET status=? WHERE id=?",[$status,$school]);audit(null,null,'status','school',$school);flash('School status updated.');redirect('company');
   }
   $u=require_school();$school=(int)$u['school_id'];$actor=(int)$u['id'];$branch=(int)($u['branch_id']??0);
-  if(in_array($action,['branch','academic_session','session_activate','class','section','subject','person','student_enrollment','allocation','timetable','notice','library_book','transport_route','inventory_item','certificate','fee_invoice','payroll'],true)){
+  if(in_array($action,['admission_apply','admission_review','admission_enroll','branch','academic_session','session_activate','class','section','subject','person','student_enrollment','allocation','timetable','notice','library_book','transport_route','inventory_item','certificate','fee_invoice','payroll'],true)){
    require_roles(['admin','principal','accountant']);
-   $academic=['branch','academic_session','class','section','subject','person','student_enrollment','allocation','timetable','notice','library_book','transport_route','inventory_item','certificate'];
+   $academic=['admission_apply','admission_review','admission_enroll','branch','academic_session','class','section','subject','person','student_enrollment','allocation','timetable','notice','library_book','transport_route','inventory_item','certificate'];
    if(in_array($action,$academic,true)&&$u['role']==='accountant')throw new InvalidArgumentException('Accountant access restricted');
    $finance=['fee_invoice','payroll'];
    if(in_array($action,$finance,true)&&!in_array($u['role'],['admin','accountant'],true))throw new InvalidArgumentException('Finance access restricted');
   }
   switch($action){
+   case 'admission_apply':
+    $b=positive_id('branch_id');$c=positive_id('class_id');$sec=positive_id('section_id');
+    assert_branch($b,$school);ownership('classes',$c,$school);verify_section($school,$sec,$c,$b);
+    $email=strtolower(required_text('applicant_email'));$guardianEmail=strtolower(required_text('guardian_email'));
+    if(!filter_var($email,FILTER_VALIDATE_EMAIL)||!filter_var($guardianEmail,FILTER_VALIDATE_EMAIL))throw new InvalidArgumentException('Invalid applicant or guardian email');
+    if($email===$guardianEmail)throw new InvalidArgumentException('Student and guardian emails must differ');
+    run("INSERT INTO admission_applications(school_id,branch_id,class_id,section_id,applicant_name,applicant_email,guardian_name,guardian_email,guardian_phone,created_by) VALUES (?,?,?,?,?,?,?,?,?,?)",[
+      $school,$b,$c,$sec,required_text('applicant_name',160),$email,required_text('guardian_name',160),$guardianEmail,required_text('guardian_phone',48),$actor
+    ]);break;
+   case 'admission_review':
+    $app=positive_id('application_id');$decision=(string)($_POST['decision']??'');
+    if(!in_array($decision,['approved','rejected'],true))throw new InvalidArgumentException('Invalid review decision');
+    $record=assert_school_row('admission_applications',$app,$school);
+    if($record['status']!=='pending')throw new InvalidArgumentException('Only pending applications may be reviewed');
+    $affected=run("UPDATE admission_applications SET status=?,reviewed_by=?,reviewed_at=NOW() WHERE id=? AND school_id=? AND status='pending'",[$decision,$actor,$app,$school]);
+    if(!$affected)throw new InvalidArgumentException('Application was already reviewed');break;
+   case 'admission_enroll':
+    $app=positive_id('application_id');$admissionNo=required_text('admission_no',64);
+    $studentPassword=(string)($_POST['student_password']??'');$guardianPassword=(string)($_POST['guardian_password']??'');
+    if(strlen($studentPassword)<12||strlen($guardianPassword)<12)throw new InvalidArgumentException('Both new passwords must contain at least 12 characters');
+    db()->beginTransaction();
+    try{
+      $application=one("SELECT * FROM admission_applications WHERE id=? AND school_id=? FOR UPDATE",[$app,$school]);
+      if(!$application||$application['status']!=='approved')throw new InvalidArgumentException('Only approved applications can be enrolled');
+      $b=(int)$application['branch_id'];$sec=(int)$application['section_id'];$c=(int)$application['class_id'];
+      $section=one("SELECT * FROM sections WHERE id=? AND school_id=? AND branch_id=? AND class_id=? FOR UPDATE",[$sec,$school,$b,$c]);
+      if(!$section)throw new InvalidArgumentException('Invalid section assignment');
+      $count=(int)(one("SELECT COUNT(*) n FROM student_profiles WHERE school_id=? AND section_id=?",[$school,$sec])['n']??0);
+      if($count >= (int)$section['capacity'])throw new InvalidArgumentException('This section has reached capacity');
+      if(one("SELECT id FROM users WHERE school_id=? AND email=?",[$school,$application['applicant_email']]))throw new InvalidArgumentException('Applicant account email already exists');
+      $parent=one("SELECT id,role,branch_id FROM users WHERE school_id=? AND email=? FOR UPDATE",[$school,$application['guardian_email']]);
+      if($parent){
+        if($parent['role']!=='parent'||(int)$parent['branch_id']!==$b)throw new InvalidArgumentException('Guardian account has an incompatible role or branch');
+        $parentId=(int)$parent['id'];
+      }else{
+        run("INSERT INTO users(school_id,branch_id,role,full_name,email,password_hash) VALUES (?,?,'parent',?,?,?)",[$school,$b,$application['guardian_name'],$application['guardian_email'],password_hash($guardianPassword,PASSWORD_DEFAULT)]);
+        $parentId=(int)db()->lastInsertId();
+      }
+      run("INSERT INTO users(school_id,branch_id,role,full_name,email,password_hash) VALUES (?,?,'student',?,?,?)",[$school,$b,$application['applicant_name'],$application['applicant_email'],password_hash($studentPassword,PASSWORD_DEFAULT)]);
+      $studentId=(int)db()->lastInsertId();
+      run("INSERT INTO student_profiles(school_id,branch_id,user_id,parent_user_id,class_id,section_id,admission_no) VALUES (?,?,?,?,?,?,?)",[$school,$b,$studentId,$parentId,$c,$sec,$admissionNo]);
+      $updated=run("UPDATE admission_applications SET status='enrolled',enrolled_student_user_id=?,enrolled_parent_user_id=?,admission_number=? WHERE school_id=? AND id=? AND status='approved'",[$studentId,$parentId,$admissionNo,$school,$app]);
+      if(!$updated)throw new RuntimeException('Application could not be marked enrolled');
+      db()->commit();
+      audit($school,$actor,'enroll','admission_application',$app);
+    }catch(Throwable $e){db()->rollBack();throw $e;}
+    break;
    case 'branch':
     $code=strtoupper(required_text('code',32));if(!preg_match('/^[A-Z0-9-]+$/',$code))throw new InvalidArgumentException('Invalid branch code');
     run("INSERT INTO branches (school_id,name,code,city) VALUES (?,?,?,?)",[$school,required_text('name'),$code,trim((string)($_POST['city']??''))]);
@@ -288,12 +335,12 @@ function handle_action(): never {
   }
   audit($school,$actor,'create_or_update',$action,null);
   flash('Saved successfully.');$back=(string)($_POST['_back']??'dashboard');
-  $approved=['dashboard','setup','people','academics','attendance','homework','exams','finance','notices','resources','reports','documents','leave','timetable'];
+  $approved=['dashboard','admissions','setup','people','academics','attendance','homework','exams','finance','notices','resources','reports','documents','leave','timetable'];
   redirect(in_array($back,$approved,true)?$back:'dashboard');
  }catch(PDOException $e) {
     error_log($e->getMessage());
     flash('Database operation failed. Check duplicate values, relations and required fields.','error');
  }catch(Throwable $e){ flash($e instanceof InvalidArgumentException?$e->getMessage():'Request failed. Check server logs.','error');if(!($e instanceof InvalidArgumentException))error_log($e->getMessage()); }
- $back=(string)($_POST['_back']??'dashboard');$approved=['dashboard','company','setup','people','academics','attendance','homework','exams','finance','notices','resources','reports','documents','leave','timetable','login'];
+ $back=(string)($_POST['_back']??'dashboard');$approved=['dashboard','company','admissions','setup','people','academics','attendance','homework','exams','finance','notices','resources','reports','documents','leave','timetable','login'];
  redirect(in_array($back,$approved,true)?$back:'dashboard');
 }
