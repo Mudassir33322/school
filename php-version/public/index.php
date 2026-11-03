@@ -73,13 +73,13 @@ function selection_data(int $school, array $user): array{
  if(!$all&&!$teacher&&!$finance)return $empty;
  $data=$empty;
  if($all){
-  $data['branches']=many('SELECT id,CONCAT(name," (",code,")") name FROM branches WHERE school_id=? ORDER BY name',[$school]);
+  $data['branches']=$role==='principal'?many('SELECT id,CONCAT(name," (",code,")") name FROM branches WHERE school_id=? AND id=? ORDER BY name',[$school,(int)$user['branch_id']]):many('SELECT id,CONCAT(name," (",code,")") name FROM branches WHERE school_id=? ORDER BY name',[$school]);
   $data['classes']=many('SELECT id,name FROM classes WHERE school_id=? ORDER BY sort_order,name',[$school]);
-  $data['sections']=many('SELECT sections.id,CONCAT(classes.name," / ",sections.name) name FROM sections JOIN classes ON classes.id=sections.class_id WHERE sections.school_id=? ORDER BY classes.name,sections.name',[$school]);
+  $data['sections']=$role==='principal'?many('SELECT sections.id,CONCAT(classes.name," / ",sections.name) name FROM sections JOIN classes ON classes.id=sections.class_id WHERE sections.school_id=? AND sections.branch_id=? ORDER BY classes.name,sections.name',[$school,(int)$user['branch_id']]):many('SELECT sections.id,CONCAT(classes.name," / ",sections.name) name FROM sections JOIN classes ON classes.id=sections.class_id WHERE sections.school_id=? ORDER BY classes.name,sections.name',[$school]);
   $data['subjects']=many('SELECT id,name FROM subjects WHERE school_id=? ORDER BY name',[$school]);
-  $data['teachers']=many("SELECT id,full_name name FROM users WHERE school_id=? AND role='teacher' AND status='active' ORDER BY full_name",[$school]);
-  $data['parents']=many("SELECT id,full_name name FROM users WHERE school_id=? AND role='parent' AND status='active' ORDER BY full_name",[$school]);
-  $data['accounts']=many("SELECT id,full_name name FROM users WHERE school_id=? AND role='student' AND status='active' ORDER BY full_name",[$school]);
+  $data['teachers']=$role==='principal'?many("SELECT id,full_name name FROM users WHERE school_id=? AND branch_id=? AND role='teacher' AND status='active' ORDER BY full_name",[$school,(int)$user['branch_id']]):many("SELECT id,full_name name FROM users WHERE school_id=? AND role='teacher' AND status='active' ORDER BY full_name",[$school]);
+  $data['parents']=$role==='principal'?many("SELECT id,full_name name FROM users WHERE school_id=? AND branch_id=? AND role='parent' AND status='active' ORDER BY full_name",[$school,(int)$user['branch_id']]):many("SELECT id,full_name name FROM users WHERE school_id=? AND role='parent' AND status='active' ORDER BY full_name",[$school]);
+  $data['accounts']=$role==='principal'?many("SELECT id,full_name name FROM users WHERE school_id=? AND branch_id=? AND role='student' AND status='active' ORDER BY full_name",[$school,(int)$user['branch_id']]):many("SELECT id,full_name name FROM users WHERE school_id=? AND role='student' AND status='active' ORDER BY full_name",[$school]);
  }
  if($teacher){
   $id=(int)$user['id'];
@@ -90,7 +90,7 @@ function selection_data(int $school, array $user): array{
  } elseif($all||$finance){
   $sql="SELECT users.id,CONCAT(users.full_name,' (',student_profiles.admission_no,')') name FROM student_profiles JOIN users ON users.id=student_profiles.user_id AND users.school_id=student_profiles.school_id WHERE student_profiles.school_id=? AND users.status='active'";
   $params=[$school];
-  if($finance&&!$all){$sql.=' AND student_profiles.branch_id=?';$params[]=(int)$user['branch_id'];}
+  if($finance||$role==='principal'){$sql.=' AND student_profiles.branch_id=?';$params[]=(int)$user['branch_id'];}
   $data['students']=many($sql.' ORDER BY users.full_name',$params);
  }
  return $data;
@@ -217,7 +217,7 @@ if($vendor){
    field('Applicant Name','applicant_name');field('Applicant Email','applicant_email','email');
    field('Guardian Name','guardian_name');field('Guardian Email','guardian_email','email');field('Guardian Phone','guardian_phone','tel');
    form_end('Register Application');end_panel();
-   $apps=many("SELECT a.id,a.applicant_name,a.applicant_email,a.guardian_name,a.guardian_phone,a.status,a.admission_number,c.name class_name,s.name section_name,a.created_at FROM admission_applications a JOIN classes c ON c.id=a.class_id JOIN sections s ON s.id=a.section_id WHERE a.school_id=? ORDER BY a.id DESC LIMIT 150",[$school]);
+   $appSql="SELECT a.id,a.applicant_name,a.applicant_email,a.guardian_name,a.guardian_phone,a.status,a.admission_number,c.name class_name,s.name section_name,a.created_at FROM admission_applications a JOIN classes c ON c.id=a.class_id JOIN sections s ON s.id=a.section_id WHERE a.school_id=?";$appParams=[$school];if($role==='principal'){$appSql.=' AND a.branch_id=?';$appParams[]=(int)$u['branch_id'];}$apps=many($appSql.' ORDER BY a.id DESC LIMIT 150',$appParams);
    panel('Admission Applications');rows_table($apps,['id'=>'ID','applicant_name'=>'Applicant','applicant_email'=>'Email','guardian_name'=>'Guardian','guardian_phone'=>'Contact','class_name'=>'Class','section_name'=>'Section','status'=>'Status','admission_number'=>'Admission #','created_at'=>'Submitted']);end_panel();
    $pending=array_values(array_filter($apps,fn($x)=>$x['status']==='pending'));
    panel('Review Pending Application');form_start('admission_review','admissions');pick('Application','application_id',opts($pending,'id','applicant_name'));pick('Review Decision','decision',['approved'=>'Approve','rejected'=>'Reject']);form_end('Save Review');end_panel();
@@ -230,19 +230,21 @@ if($vendor){
    form_end('Create Student & Enroll');end_panel();
  }
  if($page==='setup'){
+  if($role==='admin'){
   panel('Create Branch');form_start('branch','setup');field('Branch Name','name');field('Code','code');field('City','city','text','',false);form_end();end_panel();
   panel('Academic Year');form_start('academic_session','setup');field('Session Name','name');field('Start Date','start_date','date');field('End Date','end_date','date');form_end();end_panel();
   $sessions=many('SELECT id,name,start_date,end_date,is_current FROM school_sessions WHERE school_id=? ORDER BY start_date DESC',[$school]);
   panel('Academic Sessions');rows_table($sessions,['name'=>'Session','start_date'=>'Start','end_date'=>'End','is_current'=>'Current']);end_panel();
   panel('Set Current Academic Session');form_start('session_activate','setup');pick('Academic Session','session_id',opts($sessions));form_end('Activate Session');end_panel();
   panel('Add Class');form_start('class','setup');field('Class Name','name');form_end();end_panel();
+  }
   panel('Add Section');form_start('section','setup');pick('Branch','branch_id',$branches);pick('Class','class_id',$classes);field('Section Name','name');field('Capacity','capacity','number','40');form_end();end_panel();
-  panel('Add Subject');form_start('subject','setup');field('Subject Name','name');field('Subject Code','code');form_end();end_panel();
+  if($role==='admin'){panel('Add Subject');form_start('subject','setup');field('Subject Name','name');field('Subject Code','code');form_end();end_panel();}
   panel('Current Structure');rows_table(many('SELECT c.name class_name,s.name section_name,b.name branch_name,s.capacity FROM sections s JOIN classes c ON c.id=s.class_id JOIN branches b ON b.id=s.branch_id WHERE s.school_id=? ORDER BY c.name,s.name',[$school]),['class_name'=>'Class','section_name'=>'Section','branch_name'=>'Branch','capacity'=>'Capacity']);end_panel();
  }
  if($page==='people'){
   if($isAdmin){
-   panel('Create User Account');form_start('person','people');pick('Role','role',['admin'=>'Administrator','principal'=>'Principal','accountant'=>'Accountant','teacher'=>'Teacher','student'=>'Student','parent'=>'Parent','staff'=>'Staff']);pick('Branch','branch_id',$branches);field('Full Name','full_name');field('Email','email','email');field('Password (12+ chars)','password','password');form_end('Create Account');end_panel();
+   panel('Create User Account');form_start('person','people');pick('Role','role',$role==='admin'?['admin'=>'Administrator','principal'=>'Principal','accountant'=>'Accountant','teacher'=>'Teacher','student'=>'Student','parent'=>'Parent','staff'=>'Staff']:['teacher'=>'Teacher','student'=>'Student','parent'=>'Parent','staff'=>'Staff']);pick('Branch','branch_id',$branches);field('Full Name','full_name');field('Email','email','email');field('Password (12+ chars)','password','password');form_end('Create Account');end_panel();
    panel('Enroll Student / Link Parent');form_start('student_enrollment','people');pick('Student Account','student_user_id',opts($d['accounts']));pick('Parent','parent_user_id',$parents,false);pick('Branch','branch_id',$branches);pick('Class','class_id',$classes);pick('Section','section_id',$sections);field('Admission Number','admission_no');field('Roll Number','roll_no','text','',false);form_end('Enroll Student');end_panel();
   }
   if($isAdmin){
@@ -261,8 +263,8 @@ if($vendor){
    end_panel();
   }
   panel('Student Directory');
-  $sql="SELECT u.full_name,sp.admission_no,sp.roll_no,c.name class_name,s.name section_name FROM student_profiles sp JOIN users u ON u.id=sp.user_id JOIN classes c ON c.id=sp.class_id JOIN sections s ON s.id=sp.section_id WHERE sp.school_id=? ORDER BY u.full_name";
-  rows_table(many($sql,[$school]),['full_name'=>'Student','admission_no'=>'Admission #','roll_no'=>'Roll #','class_name'=>'Class','section_name'=>'Section']);end_panel();
+  $sql="SELECT u.full_name,sp.admission_no,sp.roll_no,c.name class_name,s.name section_name FROM student_profiles sp JOIN users u ON u.id=sp.user_id JOIN classes c ON c.id=sp.class_id JOIN sections s ON s.id=sp.section_id WHERE sp.school_id=?";$args=[$school];if($role==='principal'){$sql.=' AND sp.branch_id=?';$args[]=(int)$u['branch_id'];}$sql.=' ORDER BY u.full_name';
+  rows_table(many($sql,$args),['full_name'=>'Student','admission_no'=>'Admission #','roll_no'=>'Roll #','class_name'=>'Class','section_name'=>'Section']);end_panel();
  }
  if($page==='academics'){
   if($isAdmin){
