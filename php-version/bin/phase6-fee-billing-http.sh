@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -euxo pipefail
 BASE_URL="http://127.0.0.1:8080"
 COOKIE="$(mktemp)"
 PAGE="$(mktemp)"
