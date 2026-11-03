@@ -81,7 +81,7 @@ function assert_branch(int $branchId,int $schoolId): void {
     if (!one('SELECT id FROM branches WHERE id=? AND school_id=?',[$branchId,$schoolId])) throw new InvalidArgumentException('Invalid branch');
 }
 function allowed_branch(array $u,int $branchId): bool {
-    return in_array($u['role'],['admin','principal'],true) || empty($u['branch_id']) || (int)$u['branch_id']===$branchId;
+    return $u['role']==='admin' || ($branchId>0 && !empty($u['branch_id']) && (int)$u['branch_id']===$branchId);
 }
 function user_children(array $u): array {
     if ($u['role']==='student') return [(int)$u['id']];
