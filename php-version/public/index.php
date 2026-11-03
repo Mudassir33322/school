@@ -270,14 +270,46 @@ if($vendor){
  }
  if($page==='finance'){
   if($isFinance){
+   $feeBranchesSql="SELECT id,name FROM branches WHERE school_id=?";
+   $feeBranchesArgs=[$school];
+   if($role==='accountant'){$feeBranchesSql.=' AND id=?';$feeBranchesArgs[]=(int)$u['branch_id'];}
+   $feeBranches=many($feeBranchesSql.' ORDER BY name',$feeBranchesArgs);
+   $feeClasses=$classes;
+   if($role==='accountant')$feeClasses=opts(many("SELECT DISTINCT c.id,c.name FROM classes c JOIN sections se ON se.class_id=c.id AND se.school_id=c.school_id WHERE c.school_id=? AND se.branch_id=? ORDER BY c.name",[$school,(int)$u['branch_id']]));
+   $feePlansSql="SELECT f.id,b.name campus,c.name class_name,f.monthly_tuition FROM fee_plans f JOIN branches b ON b.id=f.branch_id AND b.school_id=f.school_id JOIN classes c ON c.id=f.class_id AND c.school_id=f.school_id WHERE f.school_id=?";
+   $feePlansArgs=[$school];
+   if($role==='accountant'){$feePlansSql.=' AND f.branch_id=?';$feePlansArgs[]=(int)$u['branch_id'];}
+   panel('Class Monthly Fee Plans');
+   rows_table(many($feePlansSql.' ORDER BY b.name,c.name',$feePlansArgs),['campus'=>'Campus','class_name'=>'Class','monthly_tuition'=>'Monthly Tuition (PKR)']);end_panel();
+   if($role==='admin'){
+    panel('Create / Update Tuition Fee Plan');
+    form_start('fee_plan_save','finance');
+    pick('Campus','branch_id',opts($feeBranches));pick('Class','class_id',$classes);field('Monthly Tuition (PKR)','monthly_tuition','number','0');
+    form_end('Save Monthly Plan');end_panel();
+   }
+   panel('Generate Monthly Tuition & Transport Challans');
+   echo '<p class="muted small">Invoices are created for active enrolled students in the selected campus/class, maximum 200 per request. The current fee plan is combined with the last transport assignment overlapping that month. One transport fee is charged per student; amounts are not prorated. Running the same month again will skip already billed students.</p>';
+   form_start('fee_month_generate','finance');
+   pick('Campus','branch_id',opts($feeBranches));pick('Class','class_id',$feeClasses);
+   field('Billing Month','billing_month','month',date('Y-m'));
+   field('Payment Due Date','due_date','date',date('Y-m-t'));
+   form_end('Generate Monthly Challans');end_panel();
+  }
+  if($isFinance){
    panel('Issue Fee Invoice');form_start('fee_invoice','finance');pick('Student','student_user_id',$students);field('Invoice No','invoice_no');field('Description','description');field('Amount (PKR)','amount','number');field('Due Date','due_date','date');form_end('Generate Invoice');end_panel();
   }
-  $sql='SELECT fi.id,fi.invoice_no,u.full_name student,fi.description,fi.amount,fi.due_date,COALESCE((SELECT SUM(fp.amount) FROM fee_payments fp WHERE fp.school_id=fi.school_id AND fp.invoice_id=fi.id),0) paid,COALESCE((SELECT SUM(fa.amount) FROM fee_adjustments fa WHERE fa.school_id=fi.school_id AND fa.invoice_id=fi.id),0) concessions,fi.amount-COALESCE((SELECT SUM(fp2.amount) FROM fee_payments fp2 WHERE fp2.school_id=fi.school_id AND fp2.invoice_id=fi.id),0)-COALESCE((SELECT SUM(fa2.amount) FROM fee_adjustments fa2 WHERE fa2.school_id=fi.school_id AND fa2.invoice_id=fi.id),0) balance FROM fee_invoices fi JOIN users u ON u.id=fi.student_user_id AND u.school_id=fi.school_id WHERE fi.school_id=?';$args=[$school];
+  $sql='SELECT fi.id,fi.invoice_no,u.full_name student,fi.description,fi.amount,fi.due_date,fi.billing_month,fi.source,COALESCE((SELECT SUM(fp.amount) FROM fee_payments fp WHERE fp.school_id=fi.school_id AND fp.invoice_id=fi.id),0) paid,COALESCE((SELECT SUM(fa.amount) FROM fee_adjustments fa WHERE fa.school_id=fi.school_id AND fa.invoice_id=fi.id),0) concessions,fi.amount-COALESCE((SELECT SUM(fp2.amount) FROM fee_payments fp2 WHERE fp2.school_id=fi.school_id AND fp2.invoice_id=fi.id),0)-COALESCE((SELECT SUM(fa2.amount) FROM fee_adjustments fa2 WHERE fa2.school_id=fi.school_id AND fa2.invoice_id=fi.id),0) balance FROM fee_invoices fi JOIN users u ON u.id=fi.student_user_id AND u.school_id=fi.school_id WHERE fi.school_id=?';$args=[$school];
   if($isStudent||$isParent){[$cond,$a]=student_filter('fi.student_user_id',$studentIds);$sql.=' AND '.$cond;$args=array_merge($args,$a);}
   if($role==='accountant'){$sql.=' AND fi.branch_id=?';$args[]=(int)$u['branch_id'];}
   $sql.=' ORDER BY fi.id DESC LIMIT 200';
   $invoices=many($sql,$args);
-  panel('Student Fee Ledger');rows_table($invoices,['id'=>'ID','invoice_no'=>'Invoice','student'=>'Student','description'=>'Description','amount'=>'Original','concessions'=>'Concessions','paid'=>'Paid','balance'=>'Balance','due_date'=>'Due']);end_panel();
+  panel('Student Fee Ledger');rows_table($invoices,['id'=>'ID','invoice_no'=>'Invoice','student'=>'Student','billing_month'=>'Month','source'=>'Source','description'=>'Description','amount'=>'Original','concessions'=>'Concessions','paid'=>'Paid','balance'=>'Balance','due_date'=>'Due']);end_panel();
+  $itemsSql="SELECT fi.invoice_no,u.full_name student,it.item_type,it.description,it.amount FROM fee_invoice_items it JOIN fee_invoices fi ON fi.id=it.invoice_id AND fi.school_id=it.school_id JOIN users u ON u.id=fi.student_user_id AND u.school_id=fi.school_id WHERE it.school_id=?";
+  $itemArgs=[$school];
+  if($isStudent||$isParent){[$scope,$a]=student_filter('fi.student_user_id',$studentIds);$itemsSql.=' AND '.$scope;$itemArgs=array_merge($itemArgs,$a);}
+  if($role==='accountant'){$itemsSql.=' AND fi.branch_id=?';$itemArgs[]=(int)$u['branch_id'];}
+  panel('Monthly Invoice Line Items');
+  rows_table(many($itemsSql.' ORDER BY it.id DESC LIMIT 250',$itemArgs),['invoice_no'=>'Invoice','student'=>'Student','item_type'=>'Type','description'=>'Charge','amount'=>'Amount (PKR)']);end_panel();
   if($isFinance){
    panel('Grant Fee Concession / Scholarship');form_start('fee_adjustment','finance');pick('Invoice','invoice_id',opts($invoices,'id','invoice_no'));pick('Type','adjustment_type',['concession'=>'Concession','scholarship'=>'Scholarship','waiver'=>'Waiver']);field('Amount (PKR)','amount','number');field('Reason','reason');form_end('Approve Adjustment');end_panel();
    panel('Receive Fee Payment');form_start('fee_payment','finance');pick('Invoice','invoice_id',opts($invoices,'id','invoice_no'));field('Amount Received','amount','number');pick('Mode','mode',['cash'=>'Cash','bank'=>'Bank','cheque'=>'Cheque','online_manual'=>'Manual Online']);field('Reference','reference','text','',false);form_end('Record Payment');end_panel();
