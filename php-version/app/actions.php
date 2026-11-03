@@ -92,7 +92,7 @@ function handle_action(): never {
   $u=require_school();$school=(int)$u['school_id'];$actor=(int)$u['id'];$branch=(int)($u['branch_id']??0);
   if(in_array($action,['admission_apply','admission_review','admission_enroll','student_move','library_loan','library_return','transport_assign','transport_release','inventory_move','branch','academic_session','session_activate','class','section','subject','person','student_enrollment','allocation','timetable','notice','library_book','transport_route','inventory_item','certificate','fee_plan_save','fee_month_generate','fee_invoice','fee_adjustment','fee_refund','fee_installments_create','payroll','payroll_approve','payroll_pay'],true)){
    require_roles(['admin','principal','accountant']);
-   $academic=['admission_apply','admission_review','admission_enroll','student_move','library_loan','library_return','transport_assign','transport_release','inventory_move','branch','academic_session','class','section','subject','person','student_enrollment','allocation','timetable','notice','library_book','transport_route','inventory_item','certificate'];
+   $academic=['admission_apply','admission_review','admission_enroll','student_move','library_loan','library_return','transport_assign','transport_release','inventory_move','branch','academic_session','session_activate','class','section','subject','person','student_enrollment','allocation','timetable','notice','library_book','transport_route','inventory_item','certificate'];
    if(in_array($action,$academic,true)&&$u['role']==='accountant')throw new InvalidArgumentException('Accountant access restricted');
    $finance=['fee_plan_save','fee_month_generate','fee_invoice','fee_adjustment','fee_refund','fee_installments_create','payroll','payroll_pay'];
    if(in_array($action,$finance,true))require_roles(['admin','accountant']);
@@ -100,7 +100,7 @@ function handle_action(): never {
   switch($action){
    case 'admission_apply':
     $b=positive_id('branch_id');$c=positive_id('class_id');$sec=positive_id('section_id');
-    assert_branch($b,$school);ownership('classes',$c,$school);verify_section($school,$sec,$c,$b);
+    assert_branch($b,$school);if(!allowed_branch($u,$b))throw new InvalidArgumentException('Cannot create admission for another campus');ownership('classes',$c,$school);verify_section($school,$sec,$c,$b);
     $email=strtolower(required_text('applicant_email'));$guardianEmail=strtolower(required_text('guardian_email'));
     if(!filter_var($email,FILTER_VALIDATE_EMAIL)||!filter_var($guardianEmail,FILTER_VALIDATE_EMAIL))throw new InvalidArgumentException('Invalid applicant or guardian email');
     if($email===$guardianEmail)throw new InvalidArgumentException('Student and guardian emails must differ');
@@ -111,6 +111,7 @@ function handle_action(): never {
     $app=positive_id('application_id');$decision=(string)($_POST['decision']??'');
     if(!in_array($decision,['approved','rejected'],true))throw new InvalidArgumentException('Invalid review decision');
     $record=assert_school_row('admission_applications',$app,$school);
+    if(!allowed_branch($u,(int)$record['branch_id']))throw new InvalidArgumentException('Application belongs to another campus');
     if($record['status']!=='pending')throw new InvalidArgumentException('Only pending applications may be reviewed');
     $affected=run("UPDATE admission_applications SET status=?,reviewed_by=?,reviewed_at=NOW() WHERE id=? AND school_id=? AND status='pending'",[$decision,$actor,$app,$school]);
     if(!$affected)throw new InvalidArgumentException('Application was already reviewed');break;
@@ -122,6 +123,7 @@ function handle_action(): never {
     try{
       $application=one("SELECT * FROM admission_applications WHERE id=? AND school_id=? FOR UPDATE",[$app,$school]);
       if(!$application||$application['status']!=='approved')throw new InvalidArgumentException('Only approved applications can be enrolled');
+      if(!allowed_branch($u,(int)$application['branch_id']))throw new InvalidArgumentException('Application belongs to another campus');
       $b=(int)$application['branch_id'];$sec=(int)$application['section_id'];$c=(int)$application['class_id'];
       $section=one("SELECT * FROM sections WHERE id=? AND school_id=? AND branch_id=? AND class_id=? FOR UPDATE",[$sec,$school,$b,$c]);
       if(!$section)throw new InvalidArgumentException('Invalid section assignment');
@@ -147,15 +149,18 @@ function handle_action(): never {
     }catch(Throwable $e){db()->rollBack();throw $e;}
     break;
    case 'branch':
+    require_roles(['admin']);
     $code=strtoupper(required_text('code',32));if(!preg_match('/^[A-Z0-9-]+$/',$code))throw new InvalidArgumentException('Invalid branch code');
     run("INSERT INTO branches (school_id,name,code,city) VALUES (?,?,?,?)",[$school,required_text('name'),$code,trim((string)($_POST['city']??''))]);
     break;
    case 'academic_session':
+    require_roles(['admin']);
     $start=date_input('start_date');$end=date_input('end_date');
     if($end<=$start)throw new InvalidArgumentException('End date must be later');
     run("INSERT INTO school_sessions(school_id,name,start_date,end_date,is_current) VALUES (?,?,?,?,0)",[$school,required_text('name',60),$start,$end]);
     break;
    case 'session_activate':
+    require_roles(['admin']);
     $session=assert_school_row('school_sessions',positive_id('session_id'),$school);
     db()->beginTransaction();
     try {
@@ -165,26 +170,30 @@ function handle_action(): never {
     }catch(Throwable $e){db()->rollBack();throw $e;}
     break;
    case 'class':
+    require_roles(['admin']);
     run("INSERT INTO classes(school_id,name) VALUES (?,?)",[$school,required_text('name',80)]);break;
    case 'subject':
+    require_roles(['admin']);
     run("INSERT INTO subjects(school_id,name,code) VALUES (?,?,?)",[$school,required_text('name',100),strtoupper(required_text('code',32))]);break;
    case 'section':
     $b=positive_id('branch_id');$c=positive_id('class_id');
     assert_branch($b,$school);ownership('classes',$c,$school);
+    if(!allowed_branch($u,$b))throw new InvalidArgumentException('Cannot create section for another campus');
     $capacity=positive_id('capacity');if($capacity>200)throw new InvalidArgumentException('Capacity too high');
     run("INSERT INTO sections(school_id,branch_id,class_id,name,capacity) VALUES (?,?,?,?,?)",[$school,$b,$c,required_text('name',32),$capacity]);break;
    case 'person':
     $r=(string)($_POST['role']??'');$name=required_text('full_name');$email=strtolower(required_text('email'));
     $pw=(string)($_POST['password']??'');$b=positive_id('branch_id');
     if(!in_array($r,['admin','principal','accountant','teacher','student','parent','staff'],true)||strlen($pw)<12||!filter_var($email,FILTER_VALIDATE_EMAIL))throw new InvalidArgumentException('Invalid role, email or password (minimum 12 characters)');
-    assert_branch($b,$school);if($r==='admin' && $u['role']!=='admin')throw new InvalidArgumentException('Only school admin can create another admin');run("INSERT INTO users(school_id,branch_id,role,full_name,email,password_hash) VALUES (?,?,?,?,?,?)",[$school,$b,$r,$name,$email,password_hash($pw,PASSWORD_DEFAULT)]);
+    if($u['role']==='principal' && in_array($r,['admin','principal','accountant'],true))throw new InvalidArgumentException('Only school admin can create privileged staff accounts');
+    assert_branch($b,$school);if(!allowed_branch($u,$b))throw new InvalidArgumentException('Cannot create accounts for another campus');if($r==='admin' && $u['role']!=='admin')throw new InvalidArgumentException('Only school admin can create another admin');run("INSERT INTO users(school_id,branch_id,role,full_name,email,password_hash) VALUES (?,?,?,?,?,?)",[$school,$b,$r,$name,$email,password_hash($pw,PASSWORD_DEFAULT)]);
     break;
    case 'student_enrollment':
     $id=positive_id('student_user_id');$parent=($_POST['parent_user_id']??'')!==''?positive_id('parent_user_id'):null;
     $b=positive_id('branch_id');$c=positive_id('class_id');$s=positive_id('section_id');
     $studentAccount=school_user($id,$school,'student');
     if($parent)school_user($parent,$school,'parent');
-    assert_branch($b,$school);ownership('classes',$c,$school);verify_section($school,$s,$c,$b);
+    assert_branch($b,$school);if(!allowed_branch($u,$b))throw new InvalidArgumentException('Cannot enroll in another campus');ownership('classes',$c,$school);verify_section($school,$s,$c,$b);
     if((int)$studentAccount['branch_id']!==$b)throw new InvalidArgumentException('Student account branch must match enrollment branch');
     // Lock the section row to serialize capacity checks for concurrent enrollments.
     db()->beginTransaction();
@@ -279,6 +288,7 @@ function handle_action(): never {
     $teacher=positive_id('teacher_user_id');$c=positive_id('class_id');$s=positive_id('section_id');$sub=positive_id('subject_id');
     school_user($teacher,$school,'teacher');ownership('classes',$c,$school);ownership('subjects',$sub,$school);
     $section=verify_section($school,$s,$c);$b=(int)$section['branch_id'];
+    if(!allowed_branch($u,$b))throw new InvalidArgumentException('Cannot assign staff in another campus');
     $teacherAccount=school_user($teacher,$school,'teacher');
     if((int)$teacherAccount['branch_id']!==$b)throw new InvalidArgumentException('Teacher belongs to a different branch');
     run("INSERT INTO teacher_allocations(school_id,branch_id,teacher_user_id,class_id,section_id,subject_id) VALUES (?,?,?,?,?,?)",[$school,$b,$teacher,$c,$s,$sub]);break;
@@ -286,6 +296,7 @@ function handle_action(): never {
     $c=positive_id('class_id');$s=positive_id('section_id');$sub=positive_id('subject_id');$teacher=positive_id('teacher_user_id');
     ownership('classes',$c,$school);ownership('subjects',$sub,$school);school_user($teacher,$school,'teacher');
     $section=verify_section($school,$s,$c);$b=(int)$section['branch_id'];
+    if(!allowed_branch($u,$b))throw new InvalidArgumentException('Cannot schedule another campus');
     $teacherAccount=school_user($teacher,$school,'teacher');
     if((int)$teacherAccount['branch_id']!==$b)throw new InvalidArgumentException('Teacher belongs to a different branch');
     if(!is_teacher_assigned(['id'=>$teacher,'role'=>'teacher','school_id'=>$school],$c,$s,$sub))throw new InvalidArgumentException('Teacher must first be allocated');
@@ -545,11 +556,12 @@ function handle_action(): never {
     }catch(Throwable $e){db()->rollBack();throw $e;}
     break;
    case 'notice':
+    require_roles(['admin']);
     $audience=(string)($_POST['audience']??'all');
     if(!in_array($audience,['all','teachers','students','parents'],true))throw new InvalidArgumentException('Invalid audience');
     run("INSERT INTO notices(school_id,title,body,audience) VALUES (?,?,?,?)",[$school,required_text('title'),required_text('body',50000),$audience]);break;
    case 'library_book':
-    $b=positive_id('branch_id');assert_branch($b,$school);
+    $b=positive_id('branch_id');assert_branch($b,$school);if(!allowed_branch($u,$b))throw new InvalidArgumentException('Cannot register books for another campus');
     run("INSERT INTO library_books(school_id,branch_id,title,author,isbn,copies) VALUES (?,?,?,?,?,?)",
       [$school,$b,required_text('title'),trim((string)($_POST['author']??'')),trim((string)($_POST['isbn']??'')),positive_id('copies')]);break;
    case 'transport_route':
@@ -688,7 +700,7 @@ function handle_action(): never {
     }catch(Throwable $e){db()->rollBack();throw $e;}
     break;
    case 'certificate':
-    $student=positive_id('student_user_id');verify_student($school,$student);
+    $student=positive_id('student_user_id');$studentProfile=verify_student($school,$student);if(!allowed_branch($u,(int)$studentProfile['branch_id']))throw new InvalidArgumentException('Student belongs to another campus');
     run("INSERT INTO certificates(school_id,student_user_id,title,body,issued_on) VALUES (?,?,?,?,?)",
      [$school,$student,required_text('title'),required_text('body',10000),date_input('issued_on')]);break;
    case 'leave':
